@@ -134,7 +134,7 @@ func (c *HelmChartDeployJobCtl) Run(ctx context.Context) {
 
 	done := make(chan bool)
 	go func(chan bool) {
-		if err = kube.UpgradeHelmRelease(productInfo, productChartService, nil, nil, timeOut, c.workflowCtx.WorkflowTaskCreatorUsername); err != nil {
+		if err = kube.DeploySingleHelmRelease(productInfo, productChartService, nil, nil, timeOut, c.workflowCtx.WorkflowTaskCreatorUsername); err != nil {
 			err = errors.WithMessagef(
 				err,
 				"failed to upgrade helm chart %s/%s",
@@ -145,20 +145,22 @@ func (c *HelmChartDeployJobCtl) Run(ctx context.Context) {
 		}
 	}(done)
 
-	// we add timeout check here in case helm stuck in pending status
-	select {
-	case result := <-done:
-		if !result {
+	if !c.jobTaskSpec.SkipCheckRunStatus {
+		// we add timeout check here in case helm stuck in pending status
+		select {
+		case result := <-done:
+			if !result {
+				logError(c.job, err.Error(), c.logger)
+				return
+			}
+			break
+		case <-time.After(time.Second*time.Duration(timeOut) + time.Minute):
+			err = fmt.Errorf("failed to upgrade relase for service: %s, timeout", deploy.ReleaseName)
+		}
+		if err != nil {
 			logError(c.job, err.Error(), c.logger)
 			return
 		}
-		break
-	case <-time.After(time.Second*time.Duration(timeOut) + time.Minute):
-		err = fmt.Errorf("failed to upgrade relase for service: %s, timeout", deploy.ReleaseName)
-	}
-	if err != nil {
-		logError(c.job, err.Error(), c.logger)
-		return
 	}
 
 	c.job.Status = config.StatusPassed

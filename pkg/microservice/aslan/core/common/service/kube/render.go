@@ -19,10 +19,11 @@ package kube
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strings"
 
+	"github.com/koderover/zadig/v2/pkg/types"
 	"github.com/pkg/errors"
-	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
@@ -30,6 +31,7 @@ import (
 	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/helm/pkg/releaseutil"
+	yaml "sigs.k8s.io/yaml/goyaml.v3"
 
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/models"
@@ -42,10 +44,10 @@ import (
 	commonutil "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/util"
 	"github.com/koderover/zadig/v2/pkg/setting"
 	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/getter"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/serializer"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
-	"github.com/koderover/zadig/v2/pkg/types"
 	"github.com/koderover/zadig/v2/pkg/util"
 	"github.com/koderover/zadig/v2/pkg/util/converter"
 )
@@ -126,17 +128,20 @@ func ReplaceWorkloadImages(rawYaml string, images []*commonmodels.Container) (st
 		imageMap[image.Name] = image
 	}
 
+	customKVRegExp := regexp.MustCompile(config.VariableRegEx)
+	restoreRegExp := regexp.MustCompile(config.ReplacedTempVariableRegEx)
+
 	splitYams := util.SplitYaml(rawYaml)
 	yamlStrs := make([]string, 0)
 	var err error
 	workloadRes := make([]*WorkloadResource, 0)
 	for _, yamlStr := range splitYams {
-
+		modifiedYamlStr := customKVRegExp.ReplaceAll([]byte(yamlStr), []byte("TEMP_PLACEHOLDER_$1"))
 		resKind := new(types.KubeResourceKind)
-		if err := yaml.Unmarshal([]byte(yamlStr), &resKind); err != nil {
+		if err := yaml.Unmarshal([]byte(modifiedYamlStr), &resKind); err != nil {
 			return "", nil, fmt.Errorf("unmarshal ResourceKind error: %v", err)
 		}
-		decoder := yamlutil.NewYAMLOrJSONDecoder(bytes.NewReader([]byte(yamlStr)), 5*1024*1024)
+		decoder := yamlutil.NewYAMLOrJSONDecoder(bytes.NewReader([]byte(modifiedYamlStr)), 5*1024*1024)
 
 		switch resKind.Kind {
 		case setting.Deployment:
@@ -269,7 +274,8 @@ func ReplaceWorkloadImages(rawYaml string, images []*commonmodels.Container) (st
 			}
 
 		}
-		yamlStrs = append(yamlStrs, yamlStr)
+		finalYaml := restoreRegExp.ReplaceAll([]byte(yamlStr), []byte("{{.$1}}"))
+		yamlStrs = append(yamlStrs, string(finalYaml))
 	}
 
 	return util.JoinYamls(yamlStrs), workloadRes, nil
@@ -406,13 +412,13 @@ func fetchImportedManifests(option *GeneSvcYamlOption, productInfo *models.Produ
 
 	manifests := releaseutil.SplitManifests(fullRenderedYaml)
 
-	kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), productInfo.ClusterID)
+	kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(productInfo.ClusterID)
 	if err != nil {
 		log.Errorf("cluster is not connected [%s]", productInfo.ClusterID)
 		return "", nil, errors.Wrapf(err, "cluster is not connected [%s]", productInfo.ClusterID)
 	}
 
-	clientset, err := kubeclient.GetClientset(config.HubServerAddress(), productInfo.ClusterID)
+	clientset, err := clientmanager.NewKubeClientManager().GetKubernetesClientSet(productInfo.ClusterID)
 	if err != nil {
 		log.Errorf("get client set error: %v", err)
 		return "", nil, err

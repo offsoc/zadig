@@ -37,6 +37,11 @@ func (w *Service) sendMailMessage(title, content string, users []*models.User) e
 		log.Errorf("sendMailMessage GetEmailHost error, error msg:%s", err)
 	}
 
+	emailSvc, err := systemconfig.New().GetEmailService()
+	if err != nil {
+		log.Errorf("sendMailMessage GetEmailService error, error msg:%s", err)
+	}
+
 	users, userMap := util.GeneFlatUsers(users)
 	for _, u := range users {
 		info, ok := userMap[u.UserID]
@@ -53,14 +58,15 @@ func (w *Service) sendMailMessage(title, content string, users []*models.User) e
 			continue
 		}
 		err = mail.SendEmail(&mail.EmailParams{
-			From:     email.UserName,
-			To:       info.Email,
-			Subject:  title,
-			Host:     email.Name,
-			UserName: email.UserName,
-			Password: email.Password,
-			Port:     email.Port,
-			Body:     content,
+			From:          emailSvc.Address,
+			To:            info.Email,
+			Subject:       title,
+			Host:          email.Name,
+			UserName:      email.UserName,
+			Password:      email.Password,
+			Port:          email.Port,
+			TlsSkipVerify: email.TlsSkipVerify,
+			Body:          content,
 		})
 		if err != nil {
 			log.Errorf("sendMailMessage SendEmail error, error msg:%s", err)

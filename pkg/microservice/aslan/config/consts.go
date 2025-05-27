@@ -58,6 +58,8 @@ const (
 	TimingSchedule ScheduleType = "timing"
 	// GapSchedule 间隔循环
 	GapSchedule ScheduleType = "gap"
+	// UnixstampSchedule 时间戳
+	UnixstampSchedule ScheduleType = "unix_stamp"
 )
 
 type SlackNotifyType string
@@ -299,11 +301,14 @@ const (
 	SAEBatchReleaseTypeManual = "manual"
 )
 
-type ApproveOrReject string
+type ApprovalStatus string
 
 const (
-	Approve ApproveOrReject = "approve"
-	Reject  ApproveOrReject = "reject"
+	ApprovalStatusPending  ApprovalStatus = ""
+	ApprovalStatusApprove  ApprovalStatus = "approve"
+	ApprovalStatusReject   ApprovalStatus = "reject"
+	ApprovalStatusRedirect ApprovalStatus = "redirect"
+	ApprovalStatusDone     ApprovalStatus = "done"
 )
 
 type DeploySourceType string
@@ -331,6 +336,7 @@ const (
 type EnvOperation string
 
 const (
+	EnvOperationDefault  EnvOperation = "default"
 	EnvOperationRollback EnvOperation = "rollback"
 )
 
@@ -503,9 +509,9 @@ const (
 type ParamSourceType string
 
 const (
-	ParamSourceRuntime = "runtime"
-	ParamSourceFixed   = "fixed"
-	ParamSourceGlobal  = "global"
+	ParamSourceRuntime   = "runtime"
+	ParamSourceFixed     = "fixed"
+	ParamSourceReference = "reference"
 )
 
 type RegistryProvider string
@@ -624,18 +630,22 @@ const (
 type ReleasePlanStatus string
 
 const (
-	StatusPlanning       ReleasePlanStatus = "planning"
-	StatusWaitForApprove ReleasePlanStatus = "wait_for_approval"
-	StatusExecuting      ReleasePlanStatus = "executing"
-	StatusSuccess        ReleasePlanStatus = "success"
-	StatusCancel         ReleasePlanStatus = "cancel"
+	StatusPlanning         ReleasePlanStatus = "planning"
+	StatusWaitForApprove   ReleasePlanStatus = "wait_for_approval"
+	StatusExecuting        ReleasePlanStatus = "executing"
+	StatusApprovalDenied   ReleasePlanStatus = "denied"
+	StatusTimeoutForWindow ReleasePlanStatus = "timeout"
+	StatusSuccess          ReleasePlanStatus = "success"
+	StatusCancel           ReleasePlanStatus = "cancel"
 )
 
 // ReleasePlanStatusMap is a map of status and its available next status
 var ReleasePlanStatusMap = map[ReleasePlanStatus][]ReleasePlanStatus{
-	StatusPlanning:       {StatusWaitForApprove, StatusExecuting},
-	StatusWaitForApprove: {StatusPlanning, StatusExecuting},
-	StatusExecuting:      {StatusPlanning, StatusSuccess, StatusCancel},
+	StatusPlanning:         {StatusWaitForApprove, StatusExecuting},
+	StatusWaitForApprove:   {StatusPlanning, StatusExecuting},
+	StatusExecuting:        {StatusPlanning, StatusSuccess, StatusCancel},
+	StatusTimeoutForWindow: {StatusPlanning},
+	StatusApprovalDenied:   {StatusPlanning},
 }
 
 type ReleasePlanJobType string
@@ -674,4 +684,22 @@ type DistributeImageMethod string
 const (
 	DistributeImageMethodImagePush DistributeImageMethod = "image_push"
 	DistributeImageMethodCloudSync DistributeImageMethod = "cloud_sync"
+)
+
+const (
+	AgentTypeZadigDefaultServiceAccountName      = "koderover-agent"
+	KubeConfigTypeZadigDefaultServiceAccountName = "zadig-workflow-sa"
+)
+
+const (
+	VariableRegEx             = `{{\.([\p{L}\d-]+(\.[\p{L}\d-]+)*.)}}`
+	VariableOutputRegEx       = `{{\.([\p{L}\d-]+(\.[\p{L}\d-]+)*).output.[\p{L}\d-]+}}`
+	ReplacedTempVariableRegEx = `TEMP_PLACEHOLDER_([\p{L}\d-]+(\.[\p{L}\d-]+)*)`
+)
+
+type ValueMergeStrategy string
+
+const (
+	ValueMergeStrategyReuseValue = "reuse-values"
+	ValueMergeStrategyOverride   = "override"
 )

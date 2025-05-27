@@ -23,6 +23,8 @@ import (
 	"net/url"
 	"strings"
 
+	goteamsnotify "github.com/atc0005/go-teams-notify/v2"
+	"github.com/atc0005/go-teams-notify/v2/adaptivecard"
 	"github.com/hashicorp/go-multierror"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
@@ -100,6 +102,15 @@ func (c *NotificationJobCtl) Run(ctx context.Context) {
 		}
 	} else if c.jobTaskSpec.WebHookType == setting.NotifyWebHookTypeDingDing {
 		err := sendDingDingMessage(c.workflowCtx.ProjectName, c.workflowCtx.WorkflowName, c.workflowCtx.WorkflowDisplayName, c.workflowCtx.TaskID, c.jobTaskSpec.DingDingNotificationConfig.HookAddress, c.jobTaskSpec.Title, c.jobTaskSpec.Content, c.jobTaskSpec.DingDingNotificationConfig.AtMobiles, c.jobTaskSpec.DingDingNotificationConfig.IsAtAll)
+		if err != nil {
+			c.logger.Error(err)
+			c.job.Status = config.StatusFailed
+			c.job.Error = err.Error()
+			c.ack()
+			return
+		}
+	} else if c.jobTaskSpec.WebHookType == setting.NotifyWebHookTypeMSTeam {
+		err := sendMSTeamsMessage(c.workflowCtx.ProjectName, c.workflowCtx.WorkflowName, c.workflowCtx.WorkflowDisplayName, c.workflowCtx.TaskID, c.jobTaskSpec.MSTeamsNotificationConfig.HookAddress, c.jobTaskSpec.Title, c.jobTaskSpec.Content, c.jobTaskSpec.MSTeamsNotificationConfig.AtEmails)
 		if err != nil {
 			c.logger.Error(err)
 			c.job.Status = config.StatusFailed
@@ -268,6 +279,11 @@ func sendDingDingMessage(productName, workflowName, workflowDisplayName string, 
 		url.PathEscape(workflowDisplayName),
 	)
 
+	// reference: https://open.dingtalk.com/document/orgapp/message-link-description
+	dingtalkRedirectURL := fmt.Sprintf("dingtalk://dingtalkclient/page/link?url=%s&pc_slide=false",
+		url.QueryEscape(actionURL),
+	)
+
 	messageReq := instantmessage.DingDingMessage{
 		MsgType: instantmessage.DingDingMsgType,
 		ActionCard: &instantmessage.DingDingActionCard{
@@ -278,7 +294,7 @@ func sendDingDingMessage(productName, workflowName, workflowDisplayName string, 
 			Buttons: []*instantmessage.DingDingButton{
 				{
 					Title:     "点击查看更多信息",
-					ActionURL: actionURL,
+					ActionURL: dingtalkRedirectURL,
 				},
 			},
 		},
@@ -353,12 +369,71 @@ func sendWorkWxMessage(productName, workflowName, workflowDisplayName string, ta
 	return nil
 }
 
+func sendMSTeamsMessage(productName, workflowName, workflowDisplayName string, taskID int64, uri, title, message string, emailList []string) error {
+	card, err := adaptivecard.NewTextBlockCard(message, title, true)
+	if err != nil {
+		return fmt.Errorf("failed to create text block card: %v", err)
+	}
+
+	userMentions := make([]adaptivecard.Mention, 0, len(emailList))
+	for _, email := range emailList {
+		userMention, err := adaptivecard.NewMention(email, email)
+		if err != nil {
+			return fmt.Errorf("failed to create mention: %v", err)
+		}
+		userMentions = append(userMentions, userMention)
+	}
+
+	if len(userMentions) > 0 {
+		if err := card.AddMention(false, userMentions...); err != nil {
+			return fmt.Errorf("failed to add mention to card: %v", err)
+		}
+	}
+
+	actionURL := fmt.Sprintf("%s/v1/projects/detail/%s/pipelines/custom/%s/%d?display_name=%s",
+		configbase.SystemAddress(),
+		productName,
+		workflowName,
+		taskID,
+		url.PathEscape(workflowDisplayName),
+	)
+	actionURLDesc := "点击查看更多信息"
+
+	urlAction, err := adaptivecard.NewActionOpenURL(actionURL, actionURLDesc)
+	if err != nil {
+		return fmt.Errorf("failed to create action open url: %v", err)
+	}
+
+	err = card.AddAction(false, urlAction)
+	if err != nil {
+		return fmt.Errorf("failed to add action to card: %v", err)
+	}
+
+	msg, err := adaptivecard.NewMessageFromCard(card)
+	if err != nil {
+		return fmt.Errorf("failed to create message from card: %v", err)
+	}
+
+	mstClient := goteamsnotify.NewTeamsClient()
+	err = mstClient.Send(uri, msg)
+	if err != nil {
+		return fmt.Errorf("failed to send message to MSTeams: %v", err)
+	}
+
+	return nil
+}
+
 func sendMailMessage(title, message string, users []*commonmodels.User, callerID string) error {
 	if len(users) == 0 {
 		return nil
 	}
 
 	email, err := systemconfig.New().GetEmailHost()
+	if err != nil {
+		return err
+	}
+
+	emailSvc, err := systemconfig.New().GetEmailService()
 	if err != nil {
 		return err
 	}
@@ -380,14 +455,15 @@ func sendMailMessage(title, message string, users []*commonmodels.User, callerID
 			continue
 		}
 		err = mail.SendEmail(&mail.EmailParams{
-			From:     email.UserName,
-			To:       info.Email,
-			Subject:  title,
-			Host:     email.Name,
-			UserName: email.UserName,
-			Password: email.Password,
-			Port:     email.Port,
-			Body:     message,
+			From:          emailSvc.Address,
+			To:            info.Email,
+			Subject:       title,
+			Host:          email.Name,
+			UserName:      email.UserName,
+			Password:      email.Password,
+			Port:          email.Port,
+			TlsSkipVerify: email.TlsSkipVerify,
+			Body:          message,
 		})
 		if err != nil {
 			log.Errorf("sendMailMessage SendEmail error, error msg:%s", err)

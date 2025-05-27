@@ -26,7 +26,6 @@ import (
 	commonservice "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service"
 	"github.com/koderover/zadig/v2/pkg/microservice/systemconfig/core/codehost/repository/mongodb"
 	"github.com/koderover/zadig/v2/pkg/types"
-	steptypes "github.com/koderover/zadig/v2/pkg/types/step"
 )
 
 type WorkflowV3 struct {
@@ -161,79 +160,123 @@ func (p *FreestyleJobInput) UpdateJobSpec(job *commonmodels.Job) (*commonmodels.
 		kvMap[kv.Key] = kv.Value
 	}
 
-	for _, env := range newSpec.Properties.Envs {
+	for _, env := range newSpec.Envs {
 		if val, ok := kvMap[env.Key]; ok {
 			env.Value = val
 		}
 	}
 
-	// replace the git info with the provided info
-	for _, step := range newSpec.Steps {
-		if step.StepType == config.StepGit {
-			gitStepSpec := new(steptypes.StepGitSpec)
-			if err := commonmodels.IToi(step.Spec, gitStepSpec); err != nil {
-				return nil, errors.New("unable to cast git step Spec into commonmodels.StepGitSpec")
+	newRepo := make([]*types.Repository, 0)
+	for _, repo := range newSpec.Repos {
+		for _, inputRepo := range p.RepoInfo {
+			// TODO: UPDATE THIS
+			repoInfo, err := mongodb.NewCodehostColl().GetSystemCodeHostByAlias(inputRepo.CodeHostName)
+			if err != nil {
+				return nil, errors.New("failed to find code host with name:" + inputRepo.CodeHostName)
 			}
-			for _, inputRepo := range p.RepoInfo {
-				repoInfo, err := mongodb.NewCodehostColl().GetSystemCodeHostByAlias(inputRepo.CodeHostName)
-				if err != nil {
-					return nil, errors.New("failed to find code host with name:" + inputRepo.CodeHostName)
-				}
 
-				for _, buildRepo := range gitStepSpec.Repos {
-					if buildRepo.CodehostID == repoInfo.ID {
-						if buildRepo.RepoNamespace == inputRepo.RepoNamespace && buildRepo.RepoName == inputRepo.RepoName {
-							buildRepo.Branch = inputRepo.Branch
-							buildRepo.PR = inputRepo.PR
-							buildRepo.PRs = inputRepo.PRs
-						}
+			if repo.CodehostID == repoInfo.ID {
+				if repoInfo.Type != "perforce" {
+					if repo.RepoNamespace == inputRepo.RepoNamespace && repo.RepoName == inputRepo.RepoName {
+						repo.Branch = inputRepo.Branch
+						repo.PR = inputRepo.PR
+						repo.PRs = inputRepo.PRs
+						newRepo = append(newRepo, repo)
 					}
-				}
-			}
-			step.Spec = gitStepSpec
-		}
-
-		// for perforce type codehost, since we don't have an anchor to the codehost, we are forced to use all the user's input
-		if step.StepType == config.StepPerforce {
-			p4StepSpec := new(steptypes.StepP4Spec)
-			if err := commonmodels.IToi(step.Spec, p4StepSpec); err != nil {
-				return nil, errors.New("unable to cast git step Spec into commonmodels.StepGitSpec")
-			}
-			newRepos := make([]*types.Repository, 0)
-
-			for _, inputRepo := range p.RepoInfo {
-				repoInfo, err := mongodb.NewCodehostColl().GetSystemCodeHostByAlias(inputRepo.CodeHostName)
-				if err != nil {
-					return nil, errors.New("failed to find code host with name:" + inputRepo.CodeHostName)
-				}
-
-				if repoInfo.Type != types.ProviderPerforce {
-					continue
-				}
-				var depotType string
-				if inputRepo.Stream != "" {
-					depotType = "stream"
 				} else {
-					depotType = "local"
+					var depotType string
+					if inputRepo.Stream != "" {
+						depotType = "stream"
+					} else {
+						depotType = "local"
+					}
+					newRepo = append(newRepo, &types.Repository{
+						Source:       repoInfo.Type,
+						CodehostID:   repoInfo.ID,
+						Username:     repoInfo.Username,
+						Password:     repoInfo.Password,
+						PerforceHost: repoInfo.P4Host,
+						PerforcePort: repoInfo.P4Port,
+						DepotType:    depotType,
+						Stream:       inputRepo.Stream,
+						ViewMapping:  inputRepo.ViewMapping,
+						ChangeListID: inputRepo.ChangelistID,
+						ShelveID:     inputRepo.ShelveID,
+					})
 				}
-				newRepos = append(newRepos, &types.Repository{
-					Source:       repoInfo.Type,
-					CodehostID:   repoInfo.ID,
-					Username:     repoInfo.Username,
-					Password:     repoInfo.Password,
-					PerforceHost: repoInfo.P4Host,
-					PerforcePort: repoInfo.P4Port,
-					DepotType:    depotType,
-					Stream:       inputRepo.Stream,
-					ViewMapping:  inputRepo.ViewMapping,
-					ChangeListID: inputRepo.ChangelistID,
-					ShelveID:     inputRepo.ShelveID,
-				})
 			}
-			p4StepSpec.Repos = newRepos
-			step.Spec = p4StepSpec
 		}
 	}
+
+	newSpec.Repos = newRepo
+
+	// // replace the git info with the provided info
+	// for _, step := range newSpec.Steps {
+	// 	if step.StepType == config.StepGit {
+	// 		gitStepSpec := new(steptypes.StepGitSpec)
+	// 		if err := commonmodels.IToi(step.Spec, gitStepSpec); err != nil {
+	// 			return nil, errors.New("unable to cast git step Spec into commonmodels.StepGitSpec")
+	// 		}
+	// 		for _, inputRepo := range p.RepoInfo {
+	// 			repoInfo, err := mongodb.NewCodehostColl().GetSystemCodeHostByAlias(inputRepo.CodeHostName)
+	// 			if err != nil {
+	// 				return nil, errors.New("failed to find code host with name:" + inputRepo.CodeHostName)
+	// 			}
+
+	// 			for _, buildRepo := range gitStepSpec.Repos {
+	// 				if buildRepo.CodehostID == repoInfo.ID {
+	// 					if buildRepo.RepoNamespace == inputRepo.RepoNamespace && buildRepo.RepoName == inputRepo.RepoName {
+	// 						buildRepo.Branch = inputRepo.Branch
+	// 						buildRepo.PR = inputRepo.PR
+	// 						buildRepo.PRs = inputRepo.PRs
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 		step.Spec = gitStepSpec
+	// 	}
+
+	// 	// for perforce type codehost, since we don't have an anchor to the codehost, we are forced to use all the user's input
+	// 	if step.StepType == config.StepPerforce {
+	// 		p4StepSpec := new(steptypes.StepP4Spec)
+	// 		if err := commonmodels.IToi(step.Spec, p4StepSpec); err != nil {
+	// 			return nil, errors.New("unable to cast git step Spec into commonmodels.StepGitSpec")
+	// 		}
+	// 		newRepos := make([]*types.Repository, 0)
+
+	// 		for _, inputRepo := range p.RepoInfo {
+	// 			repoInfo, err := mongodb.NewCodehostColl().GetSystemCodeHostByAlias(inputRepo.CodeHostName)
+	// 			if err != nil {
+	// 				return nil, errors.New("failed to find code host with name:" + inputRepo.CodeHostName)
+	// 			}
+
+	// 			if repoInfo.Type != types.ProviderPerforce {
+	// 				continue
+	// 			}
+	// 			var depotType string
+	// 			if inputRepo.Stream != "" {
+	// 				depotType = "stream"
+	// 			} else {
+	// 				depotType = "local"
+	// 			}
+	// 			newRepos = append(newRepos, &types.Repository{
+	// 				Source:       repoInfo.Type,
+	// 				CodehostID:   repoInfo.ID,
+	// 				Username:     repoInfo.Username,
+	// 				Password:     repoInfo.Password,
+	// 				PerforceHost: repoInfo.P4Host,
+	// 				PerforcePort: repoInfo.P4Port,
+	// 				DepotType:    depotType,
+	// 				Stream:       inputRepo.Stream,
+	// 				ViewMapping:  inputRepo.ViewMapping,
+	// 				ChangeListID: inputRepo.ChangelistID,
+	// 				ShelveID:     inputRepo.ShelveID,
+	// 			})
+	// 		}
+	// 		p4StepSpec.Repos = newRepos
+	// 		step.Spec = p4StepSpec
+	// 	}
+	// }
 
 	job.Spec = newSpec
 
@@ -273,7 +316,7 @@ func (p *ZadigBuildJobInput) UpdateJobSpec(job *commonmodels.Job) (*commonmodels
 	newSpec.DockerRegistryID = regID
 
 	buildSvcList := make([]*commonmodels.ServiceAndBuild, 0)
-	for _, svcBuild := range newSpec.ServiceAndBuilds {
+	for _, svcBuild := range newSpec.ServiceAndBuildsOptions {
 		for _, inputSvc := range p.ServiceList {
 			// if the service & service module match, we do the update logic
 			if inputSvc.ServiceName == svcBuild.ServiceName && inputSvc.ServiceModule == svcBuild.ServiceModule {
@@ -345,12 +388,15 @@ func (p *ZadigDeployJobInput) UpdateJobSpec(job *commonmodels.Job) (*commonmodel
 				ServiceModule: inputSvc.ServiceModule,
 			})
 		} else {
-			serviceMap[inputSvc.ServiceName] = &commonmodels.DeployServiceInfo{
+			basicInfo := commonmodels.DeployBasicInfo{
 				ServiceName: inputSvc.ServiceName,
 				Modules: append([]*commonmodels.DeployModuleInfo{}, &commonmodels.DeployModuleInfo{
 					Image:         inputSvc.ImageName,
 					ServiceModule: inputSvc.ServiceModule,
 				}),
+			}
+			serviceMap[inputSvc.ServiceName] = &commonmodels.DeployServiceInfo{
+				DeployBasicInfo: basicInfo,
 			}
 			newSpec.Services = append(newSpec.Services, serviceMap[inputSvc.ServiceName])
 		}
@@ -745,6 +791,36 @@ func (p *ZadigVMDeployJobInput) UpdateJobSpec(job *commonmodels.Job) (*commonmod
 	return job, nil
 }
 
+type SQLJobInput struct {
+	DatabaseName string `json:"database_name"`
+	SQL          string `json:"sql"`
+}
+
+func (p *SQLJobInput) UpdateJobSpec(job *commonmodels.Job) (*commonmodels.Job, error) {
+	newSpec := new(commonmodels.SQLJobSpec)
+	if err := commonmodels.IToi(job.Spec, newSpec); err != nil {
+		return nil, fmt.Errorf("failed to convert job.Spec to commonmodels.SQLJobSpec, err: %w", err)
+	}
+
+	if newSpec.Source == string(config.SourceRuntime) {
+		dbInstance, err := commonrepo.NewDBInstanceColl().Find(&commonrepo.DBInstanceCollFindOption{
+			Name: p.DatabaseName,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to find database instance %s, error: %w", p.DatabaseName, err)
+		}
+
+		newSpec.ID = dbInstance.ID.Hex()
+		newSpec.Type = dbInstance.Type
+	}
+
+	newSpec.SQL = p.SQL
+
+	job.Spec = newSpec
+
+	return job, nil
+}
+
 type GetHelmValuesDifferenceResp struct {
 	Current string `json:"current"`
 	Latest  string `json:"latest"`
@@ -791,6 +867,7 @@ type Param struct {
 	Value        string                 `bson:"value"                     json:"value"                       yaml:"value,omitempty"`
 	Repo         *types.Repository      `bson:"repo"                     json:"repo"                         yaml:"repo,omitempty"`
 	ChoiceOption []string               `bson:"choice_option,omitempty"   json:"choice_option,omitempty"     yaml:"choice_option,omitempty"`
+	ChoiceValue  []string               `bson:"choice_value,omitempty"    json:"choice_value,omitempty"      yaml:"choice_value,omitempty"`
 	Default      string                 `bson:"default"                   json:"default"                     yaml:"default"`
 	IsCredential bool                   `bson:"is_credential"             json:"is_credential"               yaml:"is_credential"`
 	Source       config.ParamSourceType `bson:"source,omitempty" json:"source,omitempty" yaml:"source,omitempty"`

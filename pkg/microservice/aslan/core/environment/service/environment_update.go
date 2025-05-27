@@ -22,11 +22,11 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-multierror"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/util/sets"
 
-	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
 	commonmodels "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/models"
 	templatemodels "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/models/template"
 	commonrepo "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/mongodb"
@@ -38,7 +38,6 @@ import (
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/repository"
 	commontypes "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/types"
 	"github.com/koderover/zadig/v2/pkg/setting"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
 	e "github.com/koderover/zadig/v2/pkg/tool/errors"
 	helmtool "github.com/koderover/zadig/v2/pkg/tool/helmclient"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
@@ -55,7 +54,7 @@ func InstallService(helmClient *helmtool.HelmClient, param *kube.ReleaseInstallP
 		}
 		return nil
 	}
-	errList := batchExecutorWithRetry(3, time.Millisecond*2500, []*kube.ReleaseInstallParam{param}, handler, log.SugaredLogger())
+	errList := kube.BatchExecutorWithRetry(3, time.Millisecond*2500, []*kube.ReleaseInstallParam{param}, handler, log.SugaredLogger())
 	if len(errList) > 0 {
 		return errList[0]
 	}
@@ -154,7 +153,7 @@ func reInstallHelmServiceInEnv(productInfo *commonmodels.Product, templateSvc *c
 		return
 	}
 
-	param, errBuildParam := buildInstallParam(productInfo.DefaultValues, productInfo, renderChart, productSvc)
+	param, errBuildParam := kube.BuildInstallParam(productInfo.DefaultValues, productInfo, renderChart, productSvc)
 	if errBuildParam != nil {
 		err = fmt.Errorf("failed to generate install param, service: %s, namespace: %s, err: %s", templateSvc.ServiceName, productInfo.Namespace, errBuildParam)
 		return
@@ -284,7 +283,7 @@ func updateK8sSvcInAllEnvs(productName string, templateSvc *commonmodels.Service
 func updateK8sProduct(exitedProd *commonmodels.Product, user, requestID string, updateRevisionSvc []string, filter svcUpgradeFilter, updatedSvcs []*templatemodels.ServiceRender, deployStrategy map[string]string,
 	force bool, globalVariables []*commontypes.GlobalVariableKV, log *zap.SugaredLogger) error {
 	envName, productName := exitedProd.EnvName, exitedProd.ProductName
-	kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), exitedProd.ClusterID)
+	kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(exitedProd.ClusterID)
 	if err != nil {
 		return e.ErrUpdateEnv.AddErr(err)
 	}

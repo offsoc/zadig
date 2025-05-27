@@ -33,10 +33,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
-
 	cm "github.com/chartmuseum/helm-push/pkg/chartmuseum"
 	hc "github.com/mittwald/go-helm-client"
+	"github.com/pkg/errors"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -61,8 +60,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
 	"github.com/koderover/zadig/v2/pkg/tool/cache"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/updater"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
 	"github.com/koderover/zadig/v2/pkg/util"
@@ -121,12 +120,12 @@ func NewClient() (*HelmClient, error) {
 // NewClientFromNamespace returns a new Helm client constructed with the provided clusterID and namespace
 // a kubeClient will be initialized to support necessary k8s operations when install/upgrade helm charts
 func NewClientFromNamespace(clusterID, namespace string) (*HelmClient, error) {
-	restConfig, err := kubeclient.GetRESTConfig(config.HubServerAddress(), clusterID)
+	restConfig, err := clientmanager.NewKubeClientManager().GetRestConfig(clusterID)
 	if err != nil {
 		return nil, err
 	}
 
-	kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), clusterID)
+	kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(clusterID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +182,7 @@ type KV struct {
 	Value interface{} `json:"value"`
 }
 
+// @note when should set valuesYaml? for return all values of the chart?
 // MergeOverrideValues merge override yaml and override kvs
 // defaultValues overrideYaml used for -f option
 // overrideValues used for --set option
@@ -209,7 +209,7 @@ func MergeOverrideValues(valuesYaml, defaultValues, overrideYaml, overrideValues
 		}
 	}
 
-	valuesMap, err := yamlutil.MergeAndUnmarshal([][]byte{imageRelatedValues, []byte(valuesYaml), []byte(defaultValues), []byte(overrideYaml)})
+	valuesMap, err := yamlutil.MergeAndUnmarshal([][]byte{[]byte(valuesYaml), []byte(defaultValues), []byte(overrideYaml), imageRelatedValues})
 	if err != nil {
 		return "", err
 	}
@@ -958,6 +958,9 @@ func (hClient *HelmClient) GetChartValues(repoEntry *repo.Entry, projectName, re
 	lock.Lock()
 	defer lock.Unlock()
 
+	mutex := cache.NewRedisLockWithExpiry(fmt.Sprintf("helm_chart_download:%s", localPath), time.Minute*1)
+	mutex.Lock()
+	defer mutex.Unlock()
 	// remove local file to untar
 	_ = os.RemoveAll(localPath)
 
@@ -965,6 +968,7 @@ func (hClient *HelmClient) GetChartValues(repoEntry *repo.Entry, projectName, re
 	if err != nil {
 		return "", fmt.Errorf("failed to download chart, chartName: %s, chartRepo: %+v, err: %s", chartName, repoEntry.Name, err)
 	}
+	mutex.Unlock()
 
 	fsTree := os.DirFS(localPath)
 	valuesYAML, err := util.ReadValuesYAML(fsTree, chartName, log.SugaredLogger())

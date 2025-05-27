@@ -20,15 +20,17 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/koderover/zadig/v2/pkg/config"
 	config2 "github.com/koderover/zadig/v2/pkg/microservice/hubagent/config"
 	"github.com/koderover/zadig/v2/pkg/microservice/hubagent/core/service"
 	"github.com/koderover/zadig/v2/pkg/microservice/hubagent/server/rest"
+	"github.com/koderover/zadig/v2/pkg/microservice/user/core/service/login"
 	"github.com/koderover/zadig/v2/pkg/setting"
 	"github.com/koderover/zadig/v2/pkg/shared/client/aslan"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
 	registrytool "github.com/koderover/zadig/v2/pkg/tool/registries"
 )
@@ -51,7 +53,12 @@ func Serve(ctx context.Context) error {
 	// need to get cluster config to init k8s resource
 	initResource()
 
+	var wg sync.WaitGroup
+
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+
 		<-ctx.Done()
 
 		ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
@@ -62,7 +69,10 @@ func Serve(ctx context.Context) error {
 		}
 	}()
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+
 		err := server.ListenAndServe()
 		if err != nil && err != http.ErrServerClosed {
 			log.Errorf("Failed to start http server, error: %s", err)
@@ -70,9 +80,17 @@ func Serve(ctx context.Context) error {
 		}
 	}()
 
-	if err := service.Init(); err != nil {
-		return err
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		if err := service.Init(ctx); err != nil {
+			log.Errorf("Failed to init service, error: %s", err)
+			return
+		}
+	}()
+
+	wg.Wait()
 
 	return nil
 }
@@ -92,9 +110,15 @@ func initResource() {
 	}
 
 	if schedule {
-		ls, err := client.ListRegistries()
+		token, err := login.GetInternalToken("hub-agent")
 		if err != nil {
-			log.Fatalf("failed to get information from zadig server to set DinD, err: %s", err)
+			log.Fatalf("failed to get internal token, err: %s", err)
+		}
+		log.Infof("token: %s", token)
+
+		ls, err := client.ListRegistries(token)
+		if err != nil {
+			log.Fatalf("failed to list registries from zadig server, error: %s", err)
 		}
 
 		regList := make([]*registrytool.RegistryInfoForDinDUpdate, 0)
@@ -112,12 +136,12 @@ func initResource() {
 			regList = append(regList, regItem)
 		}
 
-		dynamicClient, err := kubeclient.GetDynamicKubeClient(config2.AslanBaseAddr(), setting.LocalClusterID)
+		clientSet, err := clientmanager.NewKubeClientManager().GetKubernetesClientSet(setting.LocalClusterID)
 		if err != nil {
 			log.Fatalf("failed to create dynamic kubernetes clientset for clusterID: %s, the error is: %s", setting.LocalClusterID, err)
 		}
 
-		err = registrytool.PrepareDinD(dynamicClient, "koderover-agent", regList)
+		err = registrytool.PrepareDinD(clientSet, "koderover-agent", regList)
 		if err != nil {
 			log.Fatalf("failed to update dind, the error is: %s", err)
 		}

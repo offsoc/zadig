@@ -82,16 +82,20 @@ func MongoDatabase() string {
 	return configbase.MongoDatabase()
 }
 
-func HubServerAddress() string {
-	return configbase.HubServerServiceAddress()
-}
-
 func HubAgentImage() string {
 	return viper.GetString(setting.ENVHubAgentImage)
 }
 
 func ExecutorImage() string {
 	return viper.GetString(setting.ENVExecutorImage)
+}
+
+func ExecutorLogLevel() string {
+	logLevel := viper.GetString(setting.ENVExecutorLogLevel)
+	if len(logLevel) == 0 {
+		return "info"
+	}
+	return logLevel
 }
 
 func KodespaceVersion() string {

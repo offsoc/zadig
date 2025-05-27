@@ -76,7 +76,7 @@ func CreateWorkflowTaskV4(c *gin.Context) {
 
 	ticketID := c.Query("approval_ticket_id")
 
-	internalhandler.InsertOperationLog(c, ctx.UserName, args.Project, "新建", "自定义工作流任务", args.Name, data, ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, args.Project, "新建", "自定义工作流任务", args.Name, data, types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -118,7 +118,7 @@ func CreateWorkflowTaskV4ByBuildInTrigger(c *gin.Context) {
 	if triggerName == "" {
 		triggerName = setting.DefaultTaskRevoker
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, args.Project, "新建", "自定义工作流任务", args.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, args.Project, "新建", "自定义工作流任务", args.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 	ctx.Resp, ctx.RespErr = workflow.CreateWorkflowTaskV4ByBuildInTrigger(triggerName, args, ctx.Logger)
 }
 
@@ -241,7 +241,7 @@ func CancelWorkflowTaskV4(c *gin.Context) {
 	if c.Query("username") != "" {
 		username = c.Query("username")
 	}
-	internalhandler.InsertOperationLog(c, username, projectKey, "取消", "自定义工作流任务", c.Param("workflowName"), "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, username, projectKey, "取消", "自定义工作流任务", c.Param("workflowName"), "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -282,7 +282,7 @@ func CloneWorkflowTaskV4(c *gin.Context) {
 		ctx.RespErr = e.ErrInvalidParam.AddDesc("invalid task id")
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, projectKey, "克隆", "自定义工作流任务", c.Param("workflowName"), "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, projectKey, "克隆", "自定义工作流任务", c.Param("workflowName"), "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -302,7 +302,47 @@ func CloneWorkflowTaskV4(c *gin.Context) {
 		}
 	}
 
-	ctx.Resp, ctx.RespErr = workflow.CloneWorkflowTaskV4(workflowName, taskID, ctx.Logger)
+	ctx.Resp, ctx.RespErr = workflow.CloneWorkflowTaskV4(workflowName, taskID, false, ctx.Logger)
+}
+
+func ViewWorkflowTaskV4(c *gin.Context) {
+	ctx, err := internalhandler.NewContextWithAuthorization(c)
+	defer func() { internalhandler.JSONResponse(c, ctx) }()
+
+	if err != nil {
+		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
+		ctx.UnAuthorized = true
+		return
+	}
+
+	projectKey := c.Query("projectName")
+	workflowName := c.Param("workflowName")
+
+	taskID, err := strconv.ParseInt(c.Param("taskID"), 10, 64)
+	if err != nil {
+		ctx.RespErr = e.ErrInvalidParam.AddDesc("invalid task id")
+		return
+	}
+
+	// authorization check
+	if !ctx.Resources.IsSystemAdmin {
+		if _, ok := ctx.Resources.ProjectAuthInfo[projectKey]; !ok {
+			ctx.UnAuthorized = true
+			return
+		}
+
+		if !ctx.Resources.ProjectAuthInfo[projectKey].IsProjectAdmin &&
+			!ctx.Resources.ProjectAuthInfo[projectKey].Workflow.View {
+			// check if the permission is given by collaboration mode
+			permitted, err := internalhandler.GetCollaborationModePermission(ctx.UserID, projectKey, types.ResourceTypeWorkflow, workflowName, types.WorkflowActionView)
+			if err != nil || !permitted {
+				ctx.UnAuthorized = true
+				return
+			}
+		}
+	}
+
+	ctx.Resp, ctx.RespErr = workflow.CloneWorkflowTaskV4(workflowName, taskID, true, ctx.Logger)
 }
 
 func GetManualExecWorkflowTaskV4Info(c *gin.Context) {
@@ -364,7 +404,7 @@ func RetryWorkflowTaskV4(c *gin.Context) {
 		ctx.RespErr = e.ErrInvalidParam.AddDesc("invalid task id")
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, projectKey, "重试", "自定义工作流任务", c.Param("workflowName"), "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, projectKey, "重试", "自定义工作流任务", c.Param("workflowName"), "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -426,7 +466,7 @@ func ManualExecWorkflowTaskV4(c *gin.Context) {
 		return
 	}
 
-	internalhandler.InsertOperationLog(c, ctx.UserName, projectKey, "手动执行", "自定义工作流任务", c.Param("workflowName"), string(data), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, projectKey, "手动执行", "自定义工作流任务", c.Param("workflowName"), string(data), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -446,7 +486,7 @@ func ManualExecWorkflowTaskV4(c *gin.Context) {
 		}
 	}
 
-	ctx.RespErr = workflow.ManualExecWorkflowTaskV4(workflowName, taskID, stageName, args.Jobs, ctx.UserID, ctx.UserName, ctx.Resources.IsSystemAdmin, ctx.Logger)
+	ctx.RespErr = workflow.ManualExecWorkflowTaskV4(workflowName, taskID, stageName, args.Jobs, ctx.UserID, ctx.Account, ctx.UserName, ctx.Resources.IsSystemAdmin, ctx.Logger)
 }
 
 func SetWorkflowTaskV4Breakpoint(c *gin.Context) {
@@ -560,7 +600,6 @@ func StopDebugWorkflowTaskJobV4(c *gin.Context) {
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
 	if err != nil {
-
 		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
 		ctx.UnAuthorized = true
 		return
@@ -599,6 +638,112 @@ func StopDebugWorkflowTaskJobV4(c *gin.Context) {
 		return
 	}
 	ctx.RespErr = workflow.StopDebugWorkflowTaskJobV4(workflowName, c.Param("jobName"), taskID, c.Param("position"), ctx.Logger)
+}
+
+type revertWorkflowTaskV4JobReq struct {
+	Input interface{} `json:"input"`
+}
+
+func RevertWorkflowTaskV4Job(c *gin.Context) {
+	ctx, err := internalhandler.NewContextWithAuthorization(c)
+	defer func() { internalhandler.JSONResponse(c, ctx) }()
+
+	if err != nil {
+		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
+		ctx.UnAuthorized = true
+		return
+	}
+
+	args := new(revertWorkflowTaskV4JobReq)
+	data := getBody(c)
+	if err := json.Unmarshal([]byte(data), args); err != nil {
+		log.Errorf("CreateWorkflowTaskv4 json.Unmarshal err : %s", err)
+		ctx.RespErr = e.ErrInvalidParam.AddDesc(err.Error())
+		return
+	}
+
+	workflowName := c.Param("workflowName")
+
+	w, err := workflow.FindWorkflowV4Raw(workflowName, ctx.Logger)
+	if err != nil {
+		ctx.Logger.Errorf("EnableDebugWorkflowTaskV4 error: %v", err)
+		ctx.RespErr = e.ErrInvalidParam.AddErr(err)
+		return
+	}
+
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "回滚", "自定义工作流任务", w.Name, data, types.RequestBodyTypeJSON, ctx.Logger)
+
+	// authorization check
+	if !ctx.Resources.IsSystemAdmin {
+		if _, ok := ctx.Resources.ProjectAuthInfo[w.Project]; !ok {
+			ctx.UnAuthorized = true
+			return
+		}
+
+		if !ctx.Resources.ProjectAuthInfo[w.Project].IsProjectAdmin &&
+			!ctx.Resources.ProjectAuthInfo[w.Project].Workflow.Execute {
+			// check if the permission is given by collaboration mode
+			permitted, err := internalhandler.GetCollaborationModePermission(ctx.UserID, w.Project, types.ResourceTypeWorkflow, w.Name, types.WorkflowActionRun)
+			if err != nil || !permitted {
+				ctx.UnAuthorized = true
+				return
+			}
+		}
+	}
+
+	taskID, err := strconv.ParseInt(c.Param("taskID"), 10, 64)
+	if err != nil {
+		ctx.RespErr = e.ErrInvalidParam.AddDesc("invalid task id")
+		return
+	}
+
+	ctx.RespErr = workflow.RevertWorkflowTaskV4Job(ctx, workflowName, c.Param("jobName"), taskID, args.Input, ctx.UserName, ctx.UserID, ctx.Logger)
+}
+
+func GetWorkflowTaskV4JobRevert(c *gin.Context) {
+	ctx, err := internalhandler.NewContextWithAuthorization(c)
+	defer func() { internalhandler.JSONResponse(c, ctx) }()
+
+	if err != nil {
+		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
+		ctx.UnAuthorized = true
+		return
+	}
+
+	workflowName := c.Param("workflowName")
+
+	w, err := workflow.FindWorkflowV4Raw(workflowName, ctx.Logger)
+	if err != nil {
+		ctx.Logger.Errorf("EnableDebugWorkflowTaskV4 error: %v", err)
+		ctx.RespErr = e.ErrInvalidParam.AddErr(err)
+		return
+	}
+
+	// authorization check
+	if !ctx.Resources.IsSystemAdmin {
+		if _, ok := ctx.Resources.ProjectAuthInfo[w.Project]; !ok {
+			ctx.UnAuthorized = true
+			return
+		}
+
+		if !ctx.Resources.ProjectAuthInfo[w.Project].IsProjectAdmin &&
+			!ctx.Resources.ProjectAuthInfo[w.Project].Workflow.View {
+			// check if the permission is given by collaboration mode
+			permitted, err := internalhandler.GetCollaborationModePermission(ctx.UserID, w.Project, types.ResourceTypeWorkflow, w.Name, types.WorkflowActionView)
+			if err != nil || !permitted {
+				ctx.UnAuthorized = true
+				return
+			}
+		}
+	}
+
+	taskID, err := strconv.ParseInt(c.Param("taskID"), 10, 64)
+	if err != nil {
+		ctx.RespErr = e.ErrInvalidParam.AddDesc("invalid task id")
+		return
+	}
+
+	ctx.Resp, ctx.RespErr = workflow.GetWorkflowTaskV4JobRevert(workflowName, c.Param("jobName"), taskID, ctx.Logger)
 }
 
 func ApproveStage(c *gin.Context) {
@@ -791,7 +936,7 @@ func UpdateWorkflowV4TaskRemark(c *gin.Context) {
 		return
 	}
 
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流任务", workflowName, data, ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流任务", workflowName, data, types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {

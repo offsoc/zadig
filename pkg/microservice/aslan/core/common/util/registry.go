@@ -28,9 +28,14 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ecr"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
+
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/models"
+	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/mongodb"
+	"github.com/koderover/zadig/v2/pkg/setting"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
+	registrytool "github.com/koderover/zadig/v2/pkg/tool/registries"
 	"github.com/koderover/zadig/v2/pkg/util"
 )
 
@@ -109,4 +114,33 @@ func GetAWSRegistryCredential(id, ak, sk, region string) (realAK string, realSK 
 		Expiration: time.Now().Add(expirationTime).Unix(),
 	})
 	return keypair[0], keypair[1], nil
+}
+
+func SyncDinDForRegistries() error {
+	registries, err := mongodb.NewRegistryNamespaceColl().FindAll(&mongodb.FindRegOps{})
+	if err != nil {
+		return fmt.Errorf("failed to list registry to update dind, err: %s", err)
+	}
+
+	regList := make([]*registrytool.RegistryInfoForDinDUpdate, 0)
+	for _, reg := range registries {
+		regItem := &registrytool.RegistryInfoForDinDUpdate{
+			ID:      reg.ID,
+			RegAddr: reg.RegAddr,
+		}
+		if reg.AdvancedSetting != nil {
+			regItem.AdvancedSetting = &registrytool.RegistryAdvancedSetting{
+				TLSEnabled: reg.AdvancedSetting.TLSEnabled,
+				TLSCert:    reg.AdvancedSetting.TLSCert,
+			}
+		}
+		regList = append(regList, regItem)
+	}
+
+	dynamicClient, err := clientmanager.NewKubeClientManager().GetKubernetesClientSet(setting.LocalClusterID)
+	if err != nil {
+		return fmt.Errorf("failed to get dynamic client to update dind, err: %s", err)
+	}
+
+	return registrytool.PrepareDinD(dynamicClient, config.Namespace(), regList)
 }

@@ -53,13 +53,12 @@ type filterDeployServiceVarsQuery struct {
 }
 
 type getHelmValuesDifferenceReq struct {
-	ServiceName           string            `json:"service_name"`
-	VariableYaml          string            `json:"variable_yaml"`
-	EnvName               string            `json:"env_name"`
-	IsProduction          bool              `json:"production"`
-	IsHelmChartDeploy     bool              `json:"is_helm_chart_deploy"`
-	UpdateServiceRevision bool              `json:"update_service_revision"`
-	ServiceModules        []*ModuleAndImage `json:"service_modules"`
+	ServiceName           string `json:"service_name"`
+	VariableYaml          string `json:"variable_yaml"`
+	EnvName               string `json:"env_name"`
+	IsProduction          bool   `json:"production"`
+	IsHelmChartDeploy     bool   `json:"is_helm_chart_deploy"`
+	UpdateServiceRevision bool   `json:"update_service_revision"`
 }
 
 type ModuleAndImage struct {
@@ -99,7 +98,7 @@ func CreateWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrInvalidParam.AddDesc(err.Error())
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, args.Project, "新增", "自定义工作流", args.Name, data, ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, args.Project, "新增", "自定义工作流", args.Name, data, types.RequestBodyTypeYAML, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -313,7 +312,7 @@ func UpdateWorkflowV4(c *gin.Context) {
 		return
 	}
 
-	internalhandler.InsertOperationLog(c, ctx.UserName, args.Project, "更新", "自定义工作流", args.Name, string(data), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, args.Project, "更新", "自定义工作流", args.Name, string(data), types.RequestBodyTypeYAML, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -352,7 +351,7 @@ func DeleteWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrDeleteWorkflow.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "(OpenAPI)"+"删除", "自定义工作流", c.Param("name"), "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "(OpenAPI)"+"删除", "自定义工作流", c.Param("name"), "", types.RequestBodyTypeYAML, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -423,7 +422,7 @@ func FindWorkflowV4(c *gin.Context) {
 // @Param 	body 			body 		commonmodels.WorkflowV4		  			true 	"body"
 // @Success 200 			{array} 	string
 // @Router /api/aslan/workflow/v4/dynamicVariable/render [post]
-func RenderWorkflowV4DynamicVariables(c *gin.Context) {
+func GetWorkflowV4DynamicVariableValues(c *gin.Context) {
 	ctx := internalhandler.NewContext(c)
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
@@ -436,7 +435,7 @@ func RenderWorkflowV4DynamicVariables(c *gin.Context) {
 		return
 	}
 
-	ctx.Resp, ctx.RespErr = workflow.RenderWorkflowV4Variables(ctx, args, c.Query("jobName"), c.Query("serviceName"), c.Query("moduleName"), c.Query("key"))
+	ctx.Resp, ctx.RespErr = workflow.GetWorkflowV4DynamicVariableValues(ctx, args, c.Query("jobName"), c.Query("serviceName"), c.Query("moduleName"), c.Query("key"))
 }
 
 // @Summary Get Workflow V4 Dynamic Variable's Available Variables
@@ -448,7 +447,7 @@ func RenderWorkflowV4DynamicVariables(c *gin.Context) {
 // @Param 	body 			body 		commonmodels.WorkflowV4		  			true 	"body"
 // @Success 200 			{array} 	string
 // @Router /api/aslan/workflow/v4/dynamicVariable/available [post]
-func GetWorkflowV4DynamicVariableAvailable(c *gin.Context) {
+func GetAvailableWorkflowV4DynamicVariable(c *gin.Context) {
 	ctx := internalhandler.NewContext(c)
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
@@ -461,21 +460,22 @@ func GetWorkflowV4DynamicVariableAvailable(c *gin.Context) {
 		return
 	}
 
-	ctx.Resp, ctx.RespErr = workflow.GetWorkflowV4DynamicVariableAvailable(ctx, args, c.Query("jobName"))
+	ctx.Resp, ctx.RespErr = workflow.GetAvailableWorkflowV4DynamicVariable(ctx, args, c.Query("jobName"))
 }
 
 func GetWorkflowV4Preset(c *gin.Context) {
 	ctx := internalhandler.NewContext(c)
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
-	ctx.Resp, ctx.RespErr = workflow.GetWorkflowv4Preset(c.Query("encryptedKey"), c.Param("name"), ctx.UserID, ctx.UserName, c.Query("approval_ticket_id"), ctx.Logger)
+	ctx.Resp, ctx.RespErr = workflow.GetWorkflowV4Preset(c.Query("encryptedKey"), c.Param("name"), ctx.UserID, ctx.UserName, c.Query("approval_ticket_id"), ctx.Logger)
 }
 
+// TODO: Added parameter: query: approval_ticket_id
 func GetWebhookForWorkflowV4Preset(c *gin.Context) {
 	ctx := internalhandler.NewContext(c)
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
-	ctx.Resp, ctx.RespErr = workflow.GetWebhookForWorkflowV4Preset(c.Query("workflowName"), c.Query("triggerName"), ctx.Logger)
+	ctx.Resp, ctx.RespErr = workflow.GetWebhookForWorkflowV4Preset(c.Query("workflowName"), c.Query("triggerName"), c.Query("approval_ticket_id"), ctx.Logger)
 }
 
 func CheckWorkflowV4Approval(c *gin.Context) {
@@ -497,7 +497,6 @@ func CreateWebhookForWorkflowV4(c *gin.Context) {
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
 	if err != nil {
-
 		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
 		ctx.UnAuthorized = true
 		return
@@ -514,7 +513,7 @@ func CreateWebhookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrCreateWebhook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-webhook", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-webhook", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -542,7 +541,6 @@ func UpdateWebhookForWorkflowV4(c *gin.Context) {
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
 	if err != nil {
-
 		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
 		ctx.UnAuthorized = true
 		return
@@ -559,7 +557,7 @@ func UpdateWebhookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrUpdateWebhook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流-webhook", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流-webhook", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -587,7 +585,6 @@ func DeleteWebhookForWorkflowV4(c *gin.Context) {
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
 	if err != nil {
-
 		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
 		ctx.UnAuthorized = true
 		return
@@ -599,7 +596,7 @@ func DeleteWebhookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrDeleteWebhook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-webhook", w.Name, "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-webhook", w.Name, "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -643,7 +640,7 @@ func CreateJiraHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrCreateJiraHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-jirahook", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-jirahook", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -673,10 +670,11 @@ func CreateJiraHookForWorkflowV4(c *gin.Context) {
 	ctx.RespErr = workflow.CreateJiraHookForWorkflowV4(c.Param("workflowName"), jira, ctx.Logger)
 }
 
+// TODO: Added parameter: query: approval_ticket_id
 func GetJiraHookForWorkflowV4Preset(c *gin.Context) {
 	ctx := internalhandler.NewContext(c)
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
-	ctx.Resp, ctx.RespErr = workflow.GetJiraHookForWorkflowV4Preset(c.Query("workflowName"), c.Query("hookName"), ctx.Logger)
+	ctx.Resp, ctx.RespErr = workflow.GetJiraHookForWorkflowV4Preset(c.Query("workflowName"), c.Query("hookName"), c.Query("approval_ticket_id"), ctx.Logger)
 }
 
 func ListJiraHookForWorkflowV4(c *gin.Context) {
@@ -706,7 +704,7 @@ func UpdateJiraHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrUpdateJiraHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流-jirahook", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流-jirahook", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -752,7 +750,7 @@ func DeleteJiraHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrDeleteJiraHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-jirahook", w.Name, "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-jirahook", w.Name, "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -796,7 +794,7 @@ func CreateMeegoHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrCreateMeegoHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-meegohook", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-meegohook", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -829,7 +827,7 @@ func CreateMeegoHookForWorkflowV4(c *gin.Context) {
 func GetMeegoHookForWorkflowV4Preset(c *gin.Context) {
 	ctx := internalhandler.NewContext(c)
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
-	ctx.Resp, ctx.RespErr = workflow.GetMeegoHookForWorkflowV4Preset(c.Query("workflowName"), c.Query("hookName"), ctx.Logger)
+	ctx.Resp, ctx.RespErr = workflow.GetMeegoHookForWorkflowV4Preset(c.Query("workflowName"), c.Query("hookName"), c.Query("approval_ticket_id"), ctx.Logger)
 }
 
 func ListMeegoHookForWorkflowV4(c *gin.Context) {
@@ -859,7 +857,7 @@ func UpdateMeegoHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrUpdateMeegoHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流-meegohook", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流-meegohook", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -906,7 +904,7 @@ func DeleteMeegoHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrDeleteMeegoHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-meegohook", w.Name, "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-meegohook", w.Name, "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -951,7 +949,7 @@ func CreateGeneralHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrCreateGeneralHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-generalhook", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-generalhook", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -974,10 +972,11 @@ func CreateGeneralHookForWorkflowV4(c *gin.Context) {
 	ctx.RespErr = workflow.CreateGeneralHookForWorkflowV4(c.Param("workflowName"), hook, ctx.Logger)
 }
 
+// TODO: Added parameter: query: approval_ticket_id
 func GetGeneralHookForWorkflowV4Preset(c *gin.Context) {
 	ctx := internalhandler.NewContext(c)
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
-	ctx.Resp, ctx.RespErr = workflow.GetGeneralHookForWorkflowV4Preset(c.Query("workflowName"), c.Query("hookName"), ctx.Logger)
+	ctx.Resp, ctx.RespErr = workflow.GetGeneralHookForWorkflowV4Preset(c.Query("workflowName"), c.Query("hookName"), c.Query("approval_ticket_id"), ctx.Logger)
 }
 
 func ListGeneralHookForWorkflowV4(c *gin.Context) {
@@ -991,7 +990,6 @@ func UpdateGeneralHookForWorkflowV4(c *gin.Context) {
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
 	if err != nil {
-
 		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
 		ctx.UnAuthorized = true
 		return
@@ -1008,7 +1006,7 @@ func UpdateGeneralHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrUpdateGeneralHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流-generalhook", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "更新", "自定义工作流-generalhook", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -1048,7 +1046,7 @@ func DeleteGeneralHookForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrDeleteGeneralHook.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-generalhook", w.Name, "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-generalhook", w.Name, "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -1081,7 +1079,7 @@ func GetCronForWorkflowV4Preset(c *gin.Context) {
 	ctx := internalhandler.NewContext(c)
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
-	ctx.Resp, ctx.RespErr = workflow.GetCronForWorkflowV4Preset(c.Query("workflowName"), c.Query("cronID"), ctx.Logger)
+	ctx.Resp, ctx.RespErr = workflow.GetCronForWorkflowV4Preset(c.Query("workflowName"), c.Query("cronID"), c.Query("approval_ticket_id"), ctx.Logger)
 }
 
 func ListCronForWorkflowV4(c *gin.Context) {
@@ -1113,7 +1111,7 @@ func CreateCronForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrUpsertCronjob.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-cron", w.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "新建", "自定义工作流-cron", w.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -1152,7 +1150,7 @@ func UpdateCronForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrInvalidParam.AddDesc(err.Error())
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, req.WorkflowV4Args.Project, "更新", "自定义工作流-cron", req.WorkflowV4Args.Name, getBody(c), ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, req.WorkflowV4Args.Project, "更新", "自定义工作流-cron", req.WorkflowV4Args.Name, getBody(c), types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -1192,7 +1190,7 @@ func DeleteCronForWorkflowV4(c *gin.Context) {
 		ctx.RespErr = e.ErrUpsertCronjob.AddErr(err)
 		return
 	}
-	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-cron", w.Name, "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, w.Project, "删除", "自定义工作流-cron", w.Name, "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization check
 	if !ctx.Resources.IsSystemAdmin {
@@ -1237,7 +1235,7 @@ func GetWorkflowGlobalVars(c *gin.Context) {
 		ctx.RespErr = e.ErrInvalidParam.AddDesc(err.Error())
 		return
 	}
-	ctx.Resp = workflow.GetWorkflowGlabalVars(args, c.Param("jobName"), ctx.Logger)
+	ctx.Resp, ctx.RespErr = workflow.GetWorkflowGlobalVars(args, c.Param("jobName"), ctx.Logger)
 }
 
 func GetWorkflowRepoIndex(c *gin.Context) {
@@ -1265,51 +1263,6 @@ func ListAllAvailableWorkflows(c *gin.Context) {
 	defer func() { internalhandler.JSONResponse(c, ctx) }()
 
 	ctx.Resp, ctx.RespErr = workflow.ListAllAvailableWorkflows(c.QueryArray("projects"), ctx.Logger)
-}
-
-// @Summary Get filtered env services
-// @Description Get filtered env services
-// @Tags 	workflow
-// @Accept 	json
-// @Produce json
-// @Param 	body 		body 		filterDeployServiceVarsQuery	 	true 	"body"
-// @Success 200 		{array} 	commonmodels.DeployService
-// @Router /api/aslan/workflow/v4/filterEnv [post]
-func GetFilteredEnvServices(c *gin.Context) {
-	// TODO: fix the authorization problem for this.
-	ctx := internalhandler.NewContext(c)
-	defer func() { internalhandler.JSONResponse(c, ctx) }()
-	req := new(filterDeployServiceVarsQuery)
-	if err := c.ShouldBindJSON(req); err != nil {
-		ctx.RespErr = e.ErrInvalidParam.AddDesc(err.Error())
-		return
-	}
-	ctx.Resp, ctx.RespErr = workflow.GetFilteredEnvServices(req.WorkflowName, req.JobName, req.EnvName, req.ServiceNames, ctx.Logger)
-}
-
-// @Summary Compare Helm Service Yaml In Env
-// @Description Compare Helm Service Yaml In Env
-// @Tags 	workflow
-// @Accept 	json
-// @Produce json
-// @Param 	body 		body 		getHelmValuesDifferenceReq	 	true 	"body"
-// @Success 200 		{object} 	workflow.GetHelmValuesDifferenceResp
-// @Router /api/aslan/workflow/v4/yamlComparison [post]
-func CompareHelmServiceYamlInEnv(c *gin.Context) {
-	ctx := internalhandler.NewContext(c)
-	defer func() { internalhandler.JSONResponse(c, ctx) }()
-	req := new(getHelmValuesDifferenceReq)
-	if err := c.ShouldBindJSON(req); err != nil {
-		ctx.RespErr = e.ErrInvalidParam.AddDesc(err.Error())
-		return
-	}
-	projectName := c.Query("projectName")
-
-	images := make([]string, 0)
-	for _, imageInfos := range req.ServiceModules {
-		images = append(images, imageInfos.Image)
-	}
-	ctx.Resp, ctx.RespErr = workflow.CompareHelmServiceYamlInEnv(req.ServiceName, req.VariableYaml, req.EnvName, projectName, images, req.IsProduction, req.UpdateServiceRevision, req.IsHelmChartDeploy, ctx.Logger)
 }
 
 type YamlResponse struct {
@@ -1449,4 +1402,51 @@ func getBody(c *gin.Context) string {
 		return ""
 	}
 	return string(b)
+}
+
+type HelmDeployJobMergeImageRequest struct {
+	ServiceName           string            `json:"service_name"`
+	ValuesYaml            string            `json:"values_yaml"`
+	EnvName               string            `json:"env_name"`
+	IsProduction          bool              `json:"production"`
+	UpdateServiceRevision bool              `json:"update_service_revision"`
+	ServiceModules        []*ModuleAndImage `json:"service_modules"`
+}
+
+// @Summary 工作流Helm部署任务合并镜像到ValuesYaml
+// @Description
+// @Tags 	workflow
+// @Accept 	json
+// @Produce json
+// @Param 	projectName query       string                          true    "项目名称"
+// @Param 	body 		body 		HelmDeployJobMergeImageRequest 	true 	"body"
+// @Success 200  		{object} 	workflow.HelmDeployJobMergeImageResponse
+// @Router /api/aslan/workflow/v4/deploy/mergeImage [post]
+func HelmDeployJobMergeImage(c *gin.Context) {
+	ctx, err := internalhandler.NewContextWithAuthorization(c)
+	defer func() { internalhandler.JSONResponse(c, ctx) }()
+
+	if err != nil {
+		ctx.RespErr = fmt.Errorf("authorization Info Generation failed: err %s", err)
+		ctx.UnAuthorized = true
+		return
+	}
+
+	req := new(HelmDeployJobMergeImageRequest)
+	if err := c.ShouldBindJSON(req); err != nil {
+		ctx.RespErr = e.ErrInvalidParam.AddDesc(err.Error())
+		return
+	}
+
+	projectName := c.Query("projectName")
+	if projectName == "" {
+		ctx.RespErr = e.ErrInvalidParam.AddDesc("projectName is required")
+		return
+	}
+
+	images := make([]string, 0)
+	for _, imageInfos := range req.ServiceModules {
+		images = append(images, imageInfos.Image)
+	}
+	ctx.Resp, ctx.RespErr = workflow.HelmDeployJobMergeImage(ctx, projectName, req.EnvName, req.ServiceName, req.ValuesYaml, images, req.IsProduction, req.UpdateServiceRevision)
 }

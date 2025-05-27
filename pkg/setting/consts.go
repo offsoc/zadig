@@ -42,11 +42,13 @@ const (
 	ENVRedisUserTokenDB        = "REDIS_USER_TOKEN_DB"
 	ENVRedisCommonCacheDB      = "REDIS_COMMON_CACHE_DB"
 	ENVChartVersion            = "CHART_VERSION"
+	ENVPodName                 = "BE_POD_NAME"
+	ENVPodIP                   = "BE_POD_IP"
+	ENVNamespace               = "BE_POD_NAMESPACE"
 
 	// Aslan
-	ENVPodName              = "BE_POD_NAME"
-	ENVNamespace            = "BE_POD_NAMESPACE"
 	ENVLogLevel             = "LOG_LEVEL"
+	ENVExecutorLogLevel     = "EXECUTOR_LOG_LEVEL"
 	ENVServiceStartTimeout  = "SERVICE_START_TIMEOUT"
 	ENVDefaultEnvRecycleDay = "DEFAULT_ENV_RECYCLE_DAY"
 	ENVDefaultIngressClass  = "DEFAULT_INGRESS_CLASS"
@@ -141,6 +143,7 @@ const (
 	PersistentVolumeClaim = "PersistentVolumeClaim"
 	Service               = "Service"
 	Deployment            = "Deployment"
+	CloneSet              = "CloneSet"
 	StatefulSet           = "StatefulSet"
 	Pod                   = "Pod"
 	ReplicaSet            = "ReplicaSet"
@@ -558,6 +561,7 @@ const (
 	FixedDayTimeCronjob = "timing"
 	FixedGapCronjob     = "gap"
 	CrontabCronjob      = "crontab"
+	UnixStampSchedule   = "unix_stamp"
 
 	// 定时器的所属job类型
 	WorkflowCronjob    = "workflow"
@@ -815,6 +819,7 @@ const (
 const (
 	LarkUserID           = "user_id"
 	LarkUserOpenID       = "open_id"
+	LarkDepartmentID     = "department_id"
 	LarkDepartmentOpenID = "open_department_id"
 )
 
@@ -932,7 +937,7 @@ const (
 const (
 	WorkflowScanningJobOutputKey        = "SonarCETaskID"
 	WorkflowScanningJobOutputKeyProject = "SonarProjectKey"
-	WorkflowScanningJobOutputKeyBranch =  "SonarBranchKey"
+	WorkflowScanningJobOutputKeyBranch  = "SonarBranchKey"
 )
 
 type NotifyWebHookType string
@@ -943,6 +948,7 @@ const (
 	NotifyWebHookTypeFeishuPerson NotifyWebHookType = "feishu_person"
 	NotifyWebhookTypeFeishuApp    NotifyWebHookType = "feishu_app"
 	NotifyWebHookTypeWechatWork   NotifyWebHookType = "wechat"
+	NotifyWebHookTypeMSTeam       NotifyWebHookType = "msteams"
 	NotifyWebHookTypeMail         NotifyWebHookType = "mail"
 	NotifyWebHookTypeWebook       NotifyWebHookType = "webhook"
 )
@@ -972,4 +978,8 @@ const (
 	SAEZadigEnvTagKey           = "ZADIG_ENV"
 	SAEZadigServiceTagKey       = "ZADIG_SERVICE"
 	SAEZadigServiceModuleTagKey = "ZADIG_SERVICE_MODULE"
+)
+
+const (
+	EventBusChannelClusterUpdate = "cluster_update"
 )

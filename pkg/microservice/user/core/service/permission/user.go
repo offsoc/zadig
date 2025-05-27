@@ -63,9 +63,12 @@ type UpdateUserInfo struct {
 }
 
 type OpenAPIQueryArgs struct {
-	PageNum  int    `json:"page_num,omitempty" form:"pageNum"`
-	PageSize int    `json:"page_size,omitempty" form:"pageSize"`
-	Account  string `json:"account,omitempty" form:"account"`
+	PageNum      int      `json:"page_num,omitempty" form:"pageNum"`
+	PageSize     int      `json:"page_size,omitempty" form:"pageSize"`
+	Account      string   `json:"account,omitempty" form:"account"`
+	IdentityType string   `json:"identity_type,omitempty" form:"identity_type"`
+	Name         string   `json:"name,omitempty" form:"name"`
+	Roles        []string `json:"roles,omitempty" form:"roles"`
 }
 
 type QueryArgs struct {
@@ -74,7 +77,8 @@ type QueryArgs struct {
 	IdentityType string   `json:"identity_type,omitempty"`
 	UIDs         []string `json:"uids,omitempty"`
 	PerPage      int      `json:"per_page,omitempty" form:"perPage"`
-	Page         int      `json:"page,omitempty" form:"page"`
+	Page         int      `json:"page,omitempty"  form:"page"`
+	Roles        []string `json:"roles,omitempty" form:"roles"`
 }
 
 type Password struct {
@@ -218,6 +222,7 @@ func GetUser(uid string, logger *zap.SugaredLogger) (*types.UserInfo, error) {
 			return nil, err
 		}
 	}
+
 	return userInfoRes, nil
 }
 
@@ -291,22 +296,43 @@ func SearchUserByAccount(args *QueryArgs, logger *zap.SugaredLogger) (*types.Use
 }
 
 func SearchUsers(args *QueryArgs, logger *zap.SugaredLogger) (*types.UsersResp, error) {
-	count, err := orm.GetUsersCount(args.Name)
-	if err != nil {
-		logger.Errorf("SeachUsers GetUsersCount By name:%s error, error msg:%s", args.Name, err.Error())
-		return nil, err
+	var count int64
+	var err error
+	if len(args.Roles) == 0 {
+		count, err = orm.GetUsersCount(args.Name)
+		if err != nil {
+			logger.Errorf("SeachUsers GetUsersCount By name:%s error, error msg:%s", args.Name, err.Error())
+			return nil, err
+		}
+	} else {
+		count, err = orm.GetUsersCountByRoles(args.Name, args.Roles)
+		if err != nil {
+			logger.Errorf("SeachUsers GetUsersCount By name:%s error, error msg:%s", args.Name, err.Error())
+			return nil, err
+		}
 	}
+
 	if count == 0 {
 		return &types.UsersResp{
 			TotalCount: 0,
 		}, nil
 	}
 
-	users, err := orm.ListUsers(args.Page, args.PerPage, args.Name, repository.DB)
-	if err != nil {
-		logger.Errorf("SeachUsers SeachUsers By name:%s error, error msg:%s", args.Name, err.Error())
-		return nil, err
+	var users []models.User
+	if len(args.Roles) == 0 {
+		users, err = orm.ListUsers(args.Page, args.PerPage, args.Name, repository.DB)
+		if err != nil {
+			logger.Errorf("SeachUsers SeachUsers By name:%s error, error msg:%s", args.Name, err.Error())
+			return nil, err
+		}
+	} else {
+		users, err = orm.ListUsersByNameAndRole(args.Page, args.PerPage, args.Name, args.Roles, repository.DB)
+		if err != nil {
+			logger.Errorf("SeachUsers SeachUsers By name:%s error, error msg:%s", args.Name, err.Error())
+			return nil, err
+		}
 	}
+
 	var uids []string
 	for _, user := range users {
 		uids = append(uids, user.UID)
@@ -491,15 +517,22 @@ func Retrieve(account string, logger *zap.SugaredLogger) (*RetrieveResp, error) 
 		logger.Errorf("Retrieve GetEmailHost error, error msg:%s", err)
 		return nil, fmt.Errorf("Retrieve GetEmailHost error, error msg:%s ", err)
 	}
+	emailSvc, err := systemConfigClient.GetEmailService()
+	if err != nil {
+		logger.Errorf("Retrieve GetEmailService error, error msg:%s", err)
+		return nil, fmt.Errorf("Retrieve GetEmailService error, error msg:%s ", err)
+	}
+
 	err = mail.SendEmail(&mail.EmailParams{
-		From:     email.UserName,
-		To:       user.Email,
-		Subject:  "重置密码",
-		Host:     email.Name,
-		UserName: email.UserName,
-		Password: email.Password,
-		Port:     email.Port,
-		Body:     body,
+		From:          emailSvc.Address,
+		To:            user.Email,
+		Subject:       "重置密码",
+		Host:          email.Name,
+		UserName:      email.UserName,
+		Password:      email.Password,
+		TlsSkipVerify: email.TlsSkipVerify,
+		Port:          email.Port,
+		Body:          body,
 	})
 	if err != nil {
 		logger.Errorf("Retrieve SendEmail error, error msg:%s ", err)

@@ -22,7 +22,7 @@ import (
 	"strings"
 	"sync"
 
-	openapi_v2 "github.com/google/gnostic/openapiv2"
+	openapi_v2 "github.com/google/gnostic-models/openapiv2"
 	"github.com/koderover/zadig/v2/pkg/tool/cache"
 	"github.com/koderover/zadig/v2/pkg/tool/llm"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
@@ -51,7 +51,12 @@ const (
 	StateProblemDetected AnalysisStatus = "ProblemDetected"
 
 	analysisPrompt = `Simplify the following Kubernetes error message delimited by triple dashes written in --- %s --- language; --- %s ---.
-	Provide the most possible solution in a step by step style in no more than 280 characters. Write the output in the following format:
+	Provide the most possible solution in a step by step style in no more than 280 characters. Write the output in the following format, and do not output thinking process:
+错误: {Explain error here}
+解决方案: {Step by step solution here}.
+	`
+	analysisChinesePrompt = `简化以下用 --- %s --- 语言编写的以三重破折号分隔的 Kubernetes 错误消息； --- %s ---。
+	以不超过 280 个字符的方式，一步一步地提供最可能的解决方案。按以下格式写出输出，不要输出思考过程：
 	错误: {Explain error here}
 	解决方案: {Step by step solution here}
 	`
@@ -65,14 +70,14 @@ type JsonOutput struct {
 	Results  []Result       `json:"results"`
 }
 
-func NewAnalysis(ctx context.Context, hubserverAddr, clusterID string, llmClient llm.ILLM, filters []string, namespace string, noCache bool, explain bool, maxConcurrency int, withDoc bool) (*Analysis, error) {
+func NewAnalysis(ctx context.Context, clusterID string, llmClient llm.ILLM, filters []string, namespace string, noCache bool, explain bool, maxConcurrency int, withDoc bool) (*Analysis, error) {
 	if llmClient == nil && explain {
 		fmtErr := fmt.Errorf("Error: AI provider not specified in configuration")
 		log.Error(fmtErr)
 		return nil, fmtErr
 	}
 
-	client, err := NewClient(hubserverAddr, clusterID)
+	client, err := NewClient(clusterID)
 	if err != nil {
 		log.Errorf("Error initialising kubernetes client: %v", err)
 		return nil, err
@@ -99,7 +104,6 @@ func (a *Analysis) RunAnalysis(activeFilters []string) {
 	openapiSchema := &openapi_v2.Document{}
 	if a.WithDoc {
 		var openApiErr error
-
 		openapiSchema, openApiErr = a.Client.Client.Discovery().OpenAPISchema()
 		if openApiErr != nil {
 			a.Errors = append(a.Errors, fmt.Sprintf("[KubernetesDoc] %s", openApiErr))
@@ -213,7 +217,8 @@ func (a *Analysis) GetAIResults(anonymize bool) error {
 			texts = append(texts, failure.Text)
 		}
 		prompt := fmt.Sprintf(analysisPrompt, "Chinese", strings.Join(texts, " "))
-		parsedText, err := a.AIClient.Parse(a.Context, prompt, a.Cache, llm.WithTemperature(0.3))
+		options := []llm.ParamOption{llm.WithTemperature(0.3), llm.WithModel(a.AIClient.GetModel())}
+		parsedText, err := a.AIClient.Parse(a.Context, prompt, a.Cache, options...)
 		if err != nil {
 			// Check for exhaustion
 			if strings.Contains(err.Error(), "status code: 429") {

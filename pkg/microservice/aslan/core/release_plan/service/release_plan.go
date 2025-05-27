@@ -20,14 +20,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/workflow/service/workflow/controller"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/koderover/zadig/v2/pkg/types"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
@@ -38,7 +41,6 @@ import (
 	commonrepo "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/mongodb"
 	commonservice "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service"
 	approvalservice "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/approval"
-	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/workflow/service/workflow/job"
 	"github.com/koderover/zadig/v2/pkg/setting"
 	"github.com/koderover/zadig/v2/pkg/shared/client/user"
 	"github.com/koderover/zadig/v2/pkg/shared/handler"
@@ -123,7 +125,7 @@ func CreateReleasePlan(c *handler.Context, args *models.ReleasePlan) error {
 	return nil
 }
 
-func upsertReleasePlanCron(id, name string, index int64, ScheduleExecuteTime int64) error {
+func upsertReleasePlanCron(id, name string, index int64, status config.ReleasePlanStatus, ScheduleExecuteTime int64) error {
 	var (
 		err             error
 		payload         *commonservice.CronjobPayload
@@ -146,67 +148,110 @@ func upsertReleasePlanCron(id, name string, index int64, ScheduleExecuteTime int
 		found = true
 	}
 
-	if found {
-		origEnabled := releasePlanCron.Enabled
-		releasePlanCron.Enabled = enable
-		releasePlanCron.ReleasePlanArgs = &commonmodels.ReleasePlanArgs{
-			ID:    id,
-			Name:  name,
-			Index: index,
-		}
-		releasePlanCron.Cron = util.UnixStampToCronExpr(ScheduleExecuteTime)
-
-		err = commonrepo.NewCronjobColl().Upsert(releasePlanCron)
-		if err != nil {
-			fmtErr := fmt.Errorf("Failed to upsert cron job, error: %w", err)
-			log.Error(fmtErr)
-			return err
-		}
-
-		if origEnabled && !enable {
-			// need to disable cronjob
-			payload = &commonservice.CronjobPayload{
-				Name:       releasePlanCronName,
-				JobType:    setting.ReleasePlanCronjob,
-				Action:     setting.TypeEnableCronjob,
-				DeleteList: []string{releasePlanCron.ID.Hex()},
+	if status != config.StatusExecuting {
+		// delete cron job if status is not executing
+		if found {
+			err = commonrepo.NewCronjobColl().Delete(&commonrepo.CronjobDeleteOption{
+				IDList: []string{releasePlanCron.ID.Hex()},
+			})
+			if err != nil {
+				fmtErr := fmt.Errorf("Failed to delete release plan schedule job %s, error: %w", releasePlanCron.ID.Hex(), err)
+				log.Error(fmtErr)
 			}
-		} else if !origEnabled && enable || origEnabled && enable {
+
 			payload = &commonservice.CronjobPayload{
-				Name:    releasePlanCronName,
-				JobType: setting.ReleasePlanCronjob,
-				Action:  setting.TypeEnableCronjob,
-				JobList: []*commonmodels.Schedule{cronJobToSchedule(releasePlanCron)},
+				Name:         releasePlanCronName,
+				JobType:      setting.ReleasePlanCronjob,
+				Action:       setting.TypeEnableCronjob,
+				ScheduleType: setting.UnixStampSchedule,
+				DeleteList:   []string{releasePlanCron.ID.Hex()},
 			}
-		} else {
-			// !origEnabled && !enable
-			return nil
 		}
 	} else {
-		input := &commonmodels.Cronjob{
-			Name: releasePlanCronName,
-			Type: setting.ReleasePlanCronjob,
-		}
-		input.Enabled = true
-		input.Cron = util.UnixStampToCronExpr(ScheduleExecuteTime)
-		input.ReleasePlanArgs = &commonmodels.ReleasePlanArgs{
-			ID:    id,
-			Name:  name,
-			Index: index,
-		}
+		// upsert cron job if status is executing
+		if found {
+			origEnabled := releasePlanCron.Enabled
+			releasePlanCron.Enabled = enable
+			releasePlanCron.ReleasePlanArgs = &commonmodels.ReleasePlanArgs{
+				ID:    id,
+				Name:  name,
+				Index: index,
+			}
+			releasePlanCron.JobType = setting.UnixStampSchedule
+			releasePlanCron.UnixStamp = ScheduleExecuteTime
 
-		err = commonrepo.NewCronjobColl().Upsert(input)
-		if err != nil {
-			fmtErr := fmt.Errorf("Failed to upsert cron job, error: %w", err)
-			log.Error(fmtErr)
-			return err
+			if origEnabled && !enable {
+				// need to disable cronjob
+				err = commonrepo.NewCronjobColl().Delete(&commonrepo.CronjobDeleteOption{
+					IDList: []string{releasePlanCron.ID.Hex()},
+				})
+				if err != nil {
+					fmtErr := fmt.Errorf("Failed to delete cron job %s, error: %w", releasePlanCron.ID.Hex(), err)
+					log.Error(fmtErr)
+				}
+
+				payload = &commonservice.CronjobPayload{
+					Name:         releasePlanCronName,
+					JobType:      setting.ReleasePlanCronjob,
+					Action:       setting.TypeEnableCronjob,
+					ScheduleType: setting.UnixStampSchedule,
+					DeleteList:   []string{releasePlanCron.ID.Hex()},
+				}
+			} else if !origEnabled && enable || origEnabled && enable {
+				err = commonrepo.NewCronjobColl().Upsert(releasePlanCron)
+				if err != nil {
+					fmtErr := fmt.Errorf("Failed to upsert cron job, error: %w", err)
+					log.Error(fmtErr)
+					return err
+				}
+
+				payload = &commonservice.CronjobPayload{
+					Name:         releasePlanCronName,
+					JobType:      setting.ReleasePlanCronjob,
+					Action:       setting.TypeEnableCronjob,
+					ScheduleType: setting.UnixStampSchedule,
+					JobList:      []*commonmodels.Schedule{cronJobToSchedule(releasePlanCron)},
+				}
+			} else {
+				// !origEnabled && !enable
+				return nil
+			}
+		} else {
+			if !enable {
+				return nil
+			}
+
+			input := &commonmodels.Cronjob{
+				Enabled:   enable,
+				Name:      releasePlanCronName,
+				Type:      setting.ReleasePlanCronjob,
+				JobType:   setting.UnixStampSchedule,
+				UnixStamp: ScheduleExecuteTime,
+				ReleasePlanArgs: &commonmodels.ReleasePlanArgs{
+					ID:    id,
+					Name:  name,
+					Index: index,
+				},
+			}
+
+			err = commonrepo.NewCronjobColl().Upsert(input)
+			if err != nil {
+				fmtErr := fmt.Errorf("Failed to upsert cron job, error: %w", err)
+				log.Error(fmtErr)
+				return err
+			}
+			payload = &commonservice.CronjobPayload{
+				Name:         releasePlanCronName,
+				JobType:      setting.ReleasePlanCronjob,
+				Action:       setting.TypeEnableCronjob,
+				ScheduleType: setting.UnixStampSchedule,
+				JobList:      []*commonmodels.Schedule{cronJobToSchedule(input)},
+			}
 		}
-		payload = &commonservice.CronjobPayload{
-			Name:    releasePlanCronName,
-			JobType: setting.ReleasePlanCronjob,
-			Action:  setting.TypeEnableCronjob,
-			JobList: []*commonmodels.Schedule{cronJobToSchedule(input)},
-		}
+	}
+
+	if payload == nil {
+		return nil
 	}
 
 	pl, _ := json.Marshal(payload)
@@ -236,47 +281,7 @@ func GetReleasePlan(id string) (*models.ReleasePlan, error) {
 
 	for _, releasePlanJob := range releasePlan.Jobs {
 		if releasePlanJob.Type == config.JobWorkflow {
-			spec := new(models.WorkflowReleaseJobSpec)
-			if err := models.IToi(releasePlanJob.Spec, spec); err != nil {
-				return nil, fmt.Errorf("invalid spec for job: %s. decode error: %s", releasePlanJob.Name, err)
-			}
-			if spec.Workflow == nil {
-				return nil, fmt.Errorf("workflow is nil")
-			}
-
-			originalWorkflow, err := mongodb.NewWorkflowV4Coll().Find(spec.Workflow.Name)
-			if err != nil {
-				log.Errorf("Failed to find WorkflowV4: %s, the error is: %v", spec.Workflow.Name, err)
-				return nil, fmt.Errorf("failed to find WorkflowV4: %s, the error is: %v", spec.Workflow.Name, err)
-			}
-
-			if err := job.MergeArgs(originalWorkflow, spec.Workflow); err != nil {
-				errMsg := fmt.Sprintf("merge workflow args error: %v", err)
-				log.Error(errMsg)
-				return nil, fmt.Errorf(errMsg)
-			}
-
-			for _, stage := range originalWorkflow.Stages {
-				for _, item := range stage.Jobs {
-					err := job.SetOptions(item, originalWorkflow, nil)
-					if err != nil {
-						errMsg := fmt.Sprintf("merge workflow args set options error: %v", err)
-						log.Error(errMsg)
-						return nil, fmt.Errorf(errMsg)
-					}
-
-					// additionally we need to update the user-defined args with the latest workflow configuration
-					err = job.UpdateWithLatestSetting(item, originalWorkflow)
-					if err != nil {
-						errMsg := fmt.Sprintf("failed to merge user-defined workflow args with latest workflow configuration, error: %s", err)
-						log.Error(errMsg)
-						return nil, fmt.Errorf(errMsg)
-					}
-				}
-			}
-
-			spec.Workflow = originalWorkflow
-			releasePlanJob.Spec = spec
+			releasePlanJob.Spec = nil
 		}
 	}
 
@@ -295,7 +300,24 @@ func DeleteReleasePlan(c *gin.Context, username, id string) error {
 	if err != nil {
 		return errors.Wrap(err, "get plan")
 	}
-	internalhandler.InsertOperationLog(c, username, "", "删除", "发布计划", info.Name, "", log.SugaredLogger())
+	internalhandler.InsertOperationLog(c, username, "", "删除", "发布计划", info.Name, "", types.RequestBodyTypeJSON, log.SugaredLogger())
+
+	releasePlanCronName := util.GetReleasePlanCronName(id, info.Name, info.Index)
+	releasePlanCron, err := commonrepo.NewCronjobColl().GetByName(releasePlanCronName, setting.ReleasePlanCronjob)
+	if err != nil {
+		if err != mongo.ErrNoDocuments && err != mongo.ErrNilDocument {
+			return e.ErrUpsertCronjob.AddErr(fmt.Errorf("failed to get release plan cron job, err: %w", err))
+		}
+	} else {
+		err = commonrepo.NewCronjobColl().Delete(&commonrepo.CronjobDeleteOption{
+			IDList: []string{releasePlanCron.ID.Hex()},
+		})
+		if err != nil {
+			fmtErr := fmt.Errorf("Failed to delete release plan schedule job %s, error: %w", releasePlanCron.ID.Hex(), err)
+			log.Error(fmtErr)
+		}
+	}
+
 	return mongodb.NewReleasePlanColl().DeleteByID(context.Background(), id)
 }
 
@@ -358,6 +380,40 @@ func UpdateReleasePlan(c *handler.Context, planID string, args *UpdateReleasePla
 	return nil
 }
 
+func GetReleasePlanJobDetail(planID, jobID string) (*commonmodels.ReleaseJob, error) {
+	releasePlan, err := mongodb.NewReleasePlanColl().GetByID(context.Background(), planID)
+	if err != nil {
+		return nil, errors.Wrap(err, "GetReleasePlan")
+	}
+
+	for _, releasePlanJob := range releasePlan.Jobs {
+		if releasePlanJob.ID == jobID {
+			if releasePlanJob.Type == config.JobWorkflow {
+				spec := new(models.WorkflowReleaseJobSpec)
+				if err := models.IToi(releasePlanJob.Spec, spec); err != nil {
+					return nil, fmt.Errorf("invalid spec for job: %s. decode error: %s", releasePlanJob.Name, err)
+				}
+				if spec.Workflow == nil {
+					return nil, fmt.Errorf("workflow is nil")
+				}
+
+				workflowController := controller.CreateWorkflowController(spec.Workflow)
+				if err := workflowController.UpdateWithLatestWorkflow(nil); err != nil {
+					log.Errorf("cannot merge workflow %s's input with the latest workflow settings, the error is: %v", spec.Workflow.Name, err)
+					return nil, e.ErrPresetWorkflow.AddDesc(err.Error())
+				}
+
+				spec.Workflow = workflowController.WorkflowV4
+				releasePlanJob.Spec = spec
+			}
+
+			return releasePlanJob, nil
+		}
+	}
+
+	return nil, fmt.Errorf("failed to find release plan job with id: %s. Job does not exist", jobID)
+}
+
 type ExecuteReleaseJobArgs struct {
 	ID   string      `json:"id"`
 	Name string      `json:"name"`
@@ -384,6 +440,12 @@ func ExecuteReleaseJob(c *handler.Context, planID string, args *ExecuteReleaseJo
 	if !(plan.StartTime == 0 && plan.EndTime == 0) {
 		now := time.Now().Unix()
 		if now < plan.StartTime || now > plan.EndTime {
+			if now > plan.EndTime {
+				plan.Status = config.StatusTimeoutForWindow
+				if err = mongodb.NewReleasePlanColl().UpdateByID(ctx, planID, plan); err != nil {
+					return errors.Wrap(err, "update plan")
+				}
+			}
 			return errors.Errorf("plan is not in the release time range")
 		}
 	}
@@ -435,10 +497,36 @@ func ExecuteReleaseJob(c *handler.Context, planID string, args *ExecuteReleaseJo
 	return nil
 }
 
-func ScheduleExecuteReleasePlan(c *handler.Context, planID string) error {
+func ScheduleExecuteReleasePlan(c *handler.Context, planID, jobID string) error {
 	approveLock := getLock(planID)
 	approveLock.Lock()
 	defer approveLock.Unlock()
+
+	// check if the job is already executed
+	jobObjectID, err := primitive.ObjectIDFromHex(jobID)
+	if err != nil {
+		return errors.Wrap(err, "invalid job ID")
+	}
+	_, err = commonrepo.NewCronjobColl().GetByID(jobObjectID)
+	if err != nil {
+		if !mongodb.IsErrNoDocuments(err) {
+			err = fmt.Errorf("Failed to get release job schedule job %s, error: %v", jobID, err)
+			log.Error(err)
+			return err
+		} else {
+			err = fmt.Errorf("Release job schedule job %s not found", jobID)
+			log.Error(err)
+			return err
+		}
+	}
+
+	// delete the schedule job after executed
+	err = commonrepo.NewCronjobColl().Delete(&commonrepo.CronjobDeleteOption{
+		IDList: []string{jobID},
+	})
+	if err != nil {
+		log.Errorf("Failed to delete release job schedule job %s, error: %v", jobID, err)
+	}
 
 	ctx := context.Background()
 	plan, err := mongodb.NewReleasePlanColl().GetByID(ctx, planID)
@@ -449,7 +537,7 @@ func ScheduleExecuteReleasePlan(c *handler.Context, planID string) error {
 	}
 
 	if plan.Status != config.StatusExecuting {
-		err = errors.Errorf("plan ID is %s, name is %s, index is %d, status is %s, can not execute", plan.ID, plan.Name, plan.Index, plan.Status)
+		err = errors.Errorf("plan ID is %s, name is %s, index is %d, status is %s, can not execute", plan.ID.Hex(), plan.Name, plan.Index, plan.Status)
 		log.Error(err)
 		return err
 	}
@@ -457,19 +545,19 @@ func ScheduleExecuteReleasePlan(c *handler.Context, planID string) error {
 	if !(plan.StartTime == 0 && plan.EndTime == 0) {
 		now := time.Now().Unix()
 		if now < plan.StartTime || now > plan.EndTime {
-			err = errors.Errorf("plan ID is %s, name is %s, index is %d, it's not in the release time range", plan.ID, plan.Name, plan.Index)
+			err = errors.Errorf("plan ID is %s, name is %s, index is %d, it's not in the release time range", plan.ID.Hex(), plan.Name, plan.Index)
 			log.Error(err)
 			return err
 		}
 	}
 
 	if plan.Approval != nil && plan.Approval.Enabled == true && plan.Approval.Status != config.StatusPassed {
-		err = errors.Errorf("plan ID is %s, name is %s, index is %d, it's approval status is %s, can not execute", plan.ID, plan.Name, plan.Index, plan.Approval.Status)
+		err = errors.Errorf("plan ID is %s, name is %s, index is %d, it's approval status is %s, can not execute", plan.ID.Hex(), plan.Name, plan.Index, plan.Approval.Status)
 		log.Error(err)
 		return err
 	}
 
-	log.Infof("schedule execute release plan, plan ID: %s, name: %s, index: %d", plan.ID, plan.Name, plan.Index)
+	log.Infof("schedule execute release plan, plan ID: %s, name: %s, index: %d", plan.ID.Hex(), plan.Name, plan.Index)
 
 	for _, job := range plan.Jobs {
 		if job.Type == config.JobWorkflow {
@@ -482,6 +570,21 @@ func ScheduleExecuteReleasePlan(c *handler.Context, planID string) error {
 				Name: job.Name,
 				Type: string(job.Type),
 			}
+
+			go func() {
+				if err := mongodb.NewReleasePlanLogColl().Create(&models.ReleasePlanLog{
+					PlanID:     planID,
+					Username:   "系统",
+					Account:    "",
+					Verb:       VerbExecute,
+					TargetName: args.Name,
+					TargetType: TargetTypeReleaseJob,
+					CreatedAt:  time.Now().Unix(),
+				}); err != nil {
+					log.Errorf("create release plan log error: %v", err)
+				}
+			}()
+
 			executor, err := NewReleaseJobExecutor(&ExecuteReleaseJobContext{
 				AuthResources: c.Resources,
 				UserID:        c.UserID,
@@ -508,27 +611,13 @@ func ScheduleExecuteReleasePlan(c *handler.Context, planID string) error {
 				plan.Status = config.StatusSuccess
 			}
 
-			log.Infof("schedule execute release job, plan ID: %s, name: %s, index: %d, job ID: %s, job name: %s", plan.ID, plan.Name, plan.Index, job.ID, job.Name)
+			log.Infof("schedule execute release job, plan ID: %s, name: %s, index: %d, job ID: %s, job name: %s", plan.ID.Hex(), plan.Name, plan.Index, job.ID, job.Name)
 
 			if err = mongodb.NewReleasePlanColl().UpdateByID(ctx, planID, plan); err != nil {
 				err = errors.Wrap(err, "update plan")
 				log.Error(err)
 				return err
 			}
-
-			go func() {
-				if err := mongodb.NewReleasePlanLogColl().Create(&models.ReleasePlanLog{
-					PlanID:     planID,
-					Username:   "系统",
-					Account:    "",
-					Verb:       VerbExecute,
-					TargetName: args.Name,
-					TargetType: TargetTypeReleaseJob,
-					CreatedAt:  time.Now().Unix(),
-				}); err != nil {
-					log.Errorf("create release plan log error: %v", err)
-				}
-			}()
 		}
 	}
 
@@ -652,10 +741,6 @@ func UpdateReleasePlanStatus(c *handler.Context, planID, status string, isSystem
 			return errors.Errorf("approval status is %s, can not execute", plan.Approval.Status)
 		}
 
-		if err := upsertReleasePlanCron(plan.ID.Hex(), plan.Name, plan.Index, plan.ScheduleExecuteTime); err != nil {
-			return errors.Wrap(err, "upsert release plan cron")
-		}
-
 		plan.ExecutingTime = time.Now().Unix()
 		setReleaseJobsForExecuting(plan)
 	case config.StatusWaitForApprove:
@@ -683,6 +768,10 @@ func UpdateReleasePlanStatus(c *handler.Context, planID, status string, isSystem
 
 	if err = mongodb.NewReleasePlanColl().UpdateByID(ctx, planID, plan); err != nil {
 		return errors.Wrap(err, "update plan")
+	}
+
+	if err := upsertReleasePlanCron(plan.ID.Hex(), plan.Name, plan.Index, plan.Status, plan.ScheduleExecuteTime); err != nil {
+		return errors.Wrap(err, "upsert release plan cron")
 	}
 
 	go func() {
@@ -772,8 +861,9 @@ func ApproveReleasePlan(c *handler.Context, planID string, req *ApproveRequest) 
 		}
 		plan.Status = config.StatusExecuting
 		plan.ApprovalTime = time.Now().Unix()
+		plan.ExecutingTime = time.Now().Unix()
 
-		if err := upsertReleasePlanCron(plan.ID.Hex(), plan.Name, plan.Index, plan.ScheduleExecuteTime); err != nil {
+		if err := upsertReleasePlanCron(plan.ID.Hex(), plan.Name, plan.Index, plan.Status, plan.ScheduleExecuteTime); err != nil {
 			err = errors.Wrap(err, "upsert release plan cron")
 			log.Error(err)
 		}
@@ -785,6 +875,9 @@ func ApproveReleasePlan(c *handler.Context, planID string, req *ApproveRequest) 
 			Detail:    "审批被拒绝",
 			CreatedAt: time.Now().Unix(),
 		}
+
+		plan.Status = config.StatusApprovalDenied
+		plan.ApprovalTime = time.Now().Unix()
 	}
 	if err = mongodb.NewReleasePlanColl().UpdateByID(ctx, planID, plan); err != nil {
 		return errors.Wrap(err, "update plan")
@@ -852,7 +945,7 @@ func clearApprovalData(approval *models.Approval) error {
 
 func checkReleasePlanJobsAllDone(plan *models.ReleasePlan) bool {
 	for _, job := range plan.Jobs {
-		if job.Status != config.ReleasePlanJobStatusDone && job.Status != config.ReleasePlanJobStatusSkipped {
+		if job.Status != config.ReleasePlanJobStatusDone && job.Status != config.ReleasePlanJobStatusSkipped && job.Status != config.ReleasePlanJobStatusFailed {
 			return false
 		}
 	}
@@ -875,6 +968,7 @@ func cronJobToSchedule(input *commonmodels.Cronjob) *commonmodels.Schedule {
 	return &commonmodels.Schedule{
 		ID:              input.ID,
 		Number:          input.Number,
+		UnixStamp:       input.UnixStamp,
 		Frequency:       input.Frequency,
 		Time:            input.Time,
 		MaxFailures:     input.MaxFailure,
@@ -891,6 +985,7 @@ const (
 	ListReleasePlanTypeName        ListReleasePlanType = "name"
 	ListReleasePlanTypeManager     ListReleasePlanType = "manager"
 	ListReleasePlanTypeSuccessTime ListReleasePlanType = "success_time"
+	ListReleasePlanTypeUpdateTime  ListReleasePlanType = "update_time"
 	ListReleasePlanTypeStatus      ListReleasePlanType = "status"
 )
 
@@ -950,9 +1045,36 @@ func ListReleasePlans(opt *ListReleasePlanOption) (*ListReleasePlanResp, error) 
 			SuccessTimeStart: timeStart,
 			SuccessTimeEnd:   timeEnd,
 			IsSort:           true,
+			SortBy:           mongodb.SortReleasePlanByUpdateTime,
 			PageNum:          opt.PageNum,
 			PageSize:         opt.PageSize,
 			ExcludedFields:   []string{"jobs", "logs"},
+		})
+	case ListReleasePlanTypeUpdateTime:
+		timeArr := strings.Split(opt.Keyword, "-")
+		if len(timeArr) != 2 {
+			return nil, errors.New("invalid update time range")
+		}
+
+		timeStart := int64(0)
+		timeEnd := int64(0)
+		timeStart, err = strconv.ParseInt(timeArr[0], 10, 64)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid update time start")
+		}
+		timeEnd, err = strconv.ParseInt(timeArr[1], 10, 64)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid update time end")
+		}
+
+		list, total, err = mongodb.NewReleasePlanColl().ListByOptions(&mongodb.ListReleasePlanOption{
+			UpdateTimeStart: timeStart,
+			UpdateTimeEnd:   timeEnd,
+			IsSort:          true,
+			SortBy:          mongodb.SortReleasePlanByUpdateTime,
+			PageNum:         opt.PageNum,
+			PageSize:        opt.PageSize,
+			ExcludedFields:  []string{"jobs", "logs"},
 		})
 	case ListReleasePlanTypeStatus:
 		list, total, err = mongodb.NewReleasePlanColl().ListByOptions(&mongodb.ListReleasePlanOption{

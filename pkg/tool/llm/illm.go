@@ -27,16 +27,20 @@ import (
 type Provider string
 
 const (
-	ProviderOpenAI  Provider = "openai"
-	ProviderAzure   Provider = "azure_openai"
-	ProviderAzureAD Provider = "azure_ad_openai"
+	ProviderOpenAI               Provider = "openai"
+	ProviderDeepSeek             Provider = "deepseek"
+	ProviderDeepSeekSiliconCloud Provider = "deepseek_siliconcloud"
+	ProviderAzure                Provider = "azure_openai"
+	ProviderAzureAD              Provider = "azure_ad_openai"
 )
 
 var (
 	clients = map[Provider]ILLM{
-		ProviderOpenAI:  &OpenAIClient{},
-		ProviderAzure:   &OpenAIClient{},
-		ProviderAzureAD: &OpenAIClient{},
+		ProviderOpenAI:               &OpenAIClient{},
+		ProviderDeepSeek:             &OpenAIClient{},
+		ProviderDeepSeekSiliconCloud: &OpenAIClient{},
+		ProviderAzure:                &OpenAIClient{},
+		ProviderAzureAD:              &OpenAIClient{},
 	}
 )
 
@@ -45,6 +49,7 @@ type ILLM interface {
 	GetCompletion(ctx context.Context, prompt string, options ...ParamOption) (string, error)
 	Parse(ctx context.Context, prompt string, cache cache.ICache, options ...ParamOption) (string, error)
 	GetName() string
+	GetModel() string
 }
 
 func NewClient(provider Provider) (ILLM, error) {

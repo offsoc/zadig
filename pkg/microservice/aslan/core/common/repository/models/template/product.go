@@ -121,10 +121,15 @@ func (grc *GitRepoConfig) GetNamespace() string {
 }
 
 type CustomYaml struct {
+	// helm:
+	// - in service: user override's values in advance setting
+	// - in env: user input's override yaml
+	// k8s: variable yaml
 	YamlContent       string                          `bson:"yaml_content"                      json:"yaml_content"`
 	RenderVariableKVs []*commontypes.RenderVariableKV `bson:"render_variable_kvs"               json:"render_variable_kvs"`
 	Source            string                          `bson:"source"                            json:"source"`
 	AutoSync          bool                            `bson:"auto_sync"                         json:"auto_sync"`
+	AutoSyncYaml      string                          `bson:"auto_sync_yaml"                    json:"auto_sync_yaml"`
 	SourceDetail      interface{}                     `bson:"source_detail"                     json:"source_detail"`
 	SourceID          string                          `bson:"source_id"                         json:"source_id"`
 }
@@ -136,15 +141,14 @@ type ServiceRender struct {
 	IsHelmChartDeploy bool   `bson:"is_helm_chart_deploy,omitempty"    json:"is_helm_chart_deploy,omitempty"`
 
 	// ---- for helm services begin ----
-	ChartRepo      string `bson:"chart_repo,omitempty"   json:"chart_repo,omitempty"`
-	ChartName      string `bson:"chart_name,omitempty"   json:"chart_name,omitempty"`
-	ChartVersion   string `bson:"chart_version,omitempty"   json:"chart_version,omitempty"`
-	ValuesYaml     string `bson:"values_yaml,omitempty"     json:"values_yaml,omitempty"`
+	ChartRepo    string `bson:"chart_repo,omitempty"   json:"chart_repo,omitempty"`
+	ChartName    string `bson:"chart_name,omitempty"   json:"chart_name,omitempty"`
+	ChartVersion string `bson:"chart_version,omitempty"   json:"chart_version,omitempty"`
+	// ValuesYaml     string `bson:"values_yaml,omitempty"     json:"values_yaml,omitempty"`       // full helm service values yaml, only record, not actually used in calculation
 	OverrideValues string `bson:"override_values,omitempty"   json:"override_values,omitempty"` // used for helm services, json-encoded string of kv value
 	// ---- for helm services end ----
 
 	// OverrideYaml will be used in both helm and k8s projects
-	// In k8s this is variable_yaml
 	OverrideYaml *CustomYaml `bson:"override_yaml,omitempty"   json:"override_yaml,omitempty"`
 }
 
@@ -183,6 +187,26 @@ func (p *ProductFeature) GetDeployType() string {
 		deployType = p.DeployType
 	}
 	return deployType
+}
+
+func (p *ProductFeature) IsHostProduct() bool {
+	return p != nil && p.BasicFacility == setting.BasicFacilityK8S && p.CreateEnvType == setting.SourceFromExternal
+}
+
+func (p *ProductFeature) IsHelmProduct() bool {
+	return p != nil && p.DeployType == setting.HelmDeployType && p.BasicFacility == setting.BasicFacilityK8S
+}
+
+func (p *ProductFeature) IsK8sYamlProduct() bool {
+	// if p == nil {
+	// 	return true
+	// }
+
+	return p != nil && p.DeployType == setting.K8SDeployType && p.BasicFacility == setting.BasicFacilityK8S && p.CreateEnvType != setting.SourceFromExternal
+}
+
+func (p *ProductFeature) IsCVMProduct() bool {
+	return p != nil && p.BasicFacility == setting.BasicFacilityCVM
 }
 
 type ForkProject struct {
@@ -270,22 +294,22 @@ func (p *Product) AllServiceInfoMap(production bool) map[string]*ServiceInfo {
 }
 
 func (p *Product) IsHelmProduct() bool {
-	return p.ProductFeature != nil && p.ProductFeature.DeployType == setting.HelmDeployType && p.ProductFeature.BasicFacility == setting.BasicFacilityK8S
+	return p.ProductFeature != nil && p.ProductFeature.IsHelmProduct()
 }
 
 func (p *Product) IsK8sYamlProduct() bool {
 	if p.ProductFeature == nil {
 		return true
 	}
-	return p.ProductFeature != nil && p.ProductFeature.DeployType == setting.K8SDeployType && p.ProductFeature.BasicFacility == setting.BasicFacilityK8S && p.ProductFeature.CreateEnvType != setting.SourceFromExternal
+	return p.ProductFeature.IsK8sYamlProduct()
 }
 
 func (p *Product) IsCVMProduct() bool {
-	return p.ProductFeature != nil && p.ProductFeature.BasicFacility == setting.BasicFacilityCVM
+	return p.ProductFeature != nil && p.ProductFeature.IsCVMProduct()
 }
 
 func (p *Product) IsHostProduct() bool {
-	return p.ProductFeature != nil && p.ProductFeature.BasicFacility == setting.BasicFacilityK8S && p.ProductFeature.CreateEnvType == setting.SourceFromExternal
+	return p.ProductFeature != nil && p.ProductFeature.IsHostProduct()
 }
 
 func (r *RenderKV) SetAlias() {
@@ -315,11 +339,39 @@ func (r *RenderKV) RemoveDupServices() {
 	r.Services = result
 }
 
+func (rc *ServiceRender) GetAutoSync() bool {
+	if rc.OverrideYaml == nil {
+		return false
+	}
+	return rc.OverrideYaml.AutoSync
+}
+
+func (rc *ServiceRender) GetAutoSyncYaml() string {
+	if rc.OverrideYaml == nil {
+		return ""
+	}
+	return rc.OverrideYaml.AutoSyncYaml
+}
+
+func (rc *ServiceRender) SetAutoSyncYaml(yaml string) {
+	if rc.OverrideYaml == nil {
+		rc.OverrideYaml = &CustomYaml{}
+	}
+	rc.OverrideYaml.AutoSyncYaml = yaml
+}
+
 func (rc *ServiceRender) GetOverrideYaml() string {
 	if rc.OverrideYaml == nil {
 		return ""
 	}
 	return rc.OverrideYaml.YamlContent
+}
+
+func (rc *ServiceRender) SetOverrideYaml(Yaml string) {
+	if rc.OverrideYaml == nil {
+		rc.OverrideYaml = &CustomYaml{}
+	}
+	rc.OverrideYaml.YamlContent = Yaml
 }
 
 type KV struct {

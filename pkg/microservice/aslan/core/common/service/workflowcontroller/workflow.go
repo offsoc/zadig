@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -41,7 +42,6 @@ import (
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/workflowcontroller/jobcontroller"
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/workflowstat"
 	"github.com/koderover/zadig/v2/pkg/setting"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
 	"github.com/koderover/zadig/v2/pkg/tool/cache"
 	e "github.com/koderover/zadig/v2/pkg/tool/errors"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/getter"
@@ -71,12 +71,11 @@ type WorkflowDebugEvent struct {
 }
 
 type workflowCtl struct {
-	workflowTask       *commonmodels.WorkflowTask
-	globalContextMutex sync.RWMutex
-	clusterIDMutex     sync.RWMutex
-	logger             *zap.SugaredLogger
-	prefix             string
-	ack                func()
+	workflowTask      *commonmodels.WorkflowTask
+	workflowTaskMutex sync.RWMutex
+	logger            *zap.SugaredLogger
+	prefix            string
+	ack               func()
 }
 
 func NewWorkflowController(workflowTask *commonmodels.WorkflowTask, logger *zap.SugaredLogger) *workflowCtl {
@@ -307,20 +306,10 @@ FOR:
 		return e.ErrSetBreakpoint.AddDesc("修改断点意外失败: convert job task spec")
 	}
 
-	kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), jobTaskSpec.Properties.ClusterID)
+	kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(jobTaskSpec.Properties.ClusterID)
 	if err != nil {
 		log.Errorf("set workflowTaskV4 breakpoint failed: get kube client error: %s", err)
 		return e.ErrSetBreakpoint.AddDesc("修改断点意外失败: get kube client")
-	}
-	clientSet, err := kubeclient.GetClientset(config.HubServerAddress(), jobTaskSpec.Properties.ClusterID)
-	if err != nil {
-		log.Errorf("set workflowTaskV4 breakpoint failed: get kube client set error: %s", err)
-		return e.ErrSetBreakpoint.AddDesc("修改断点意外失败: get kube client set")
-	}
-	restConfig, err := kubeclient.GetRESTConfig(config.HubServerAddress(), jobTaskSpec.Properties.ClusterID)
-	if err != nil {
-		log.Errorf("set workflowTaskV4 breakpoint failed: get kube rest config error: %s", err)
-		return e.ErrSetBreakpoint.AddDesc("修改断点意外失败: get kube rest config")
 	}
 
 	// job task is running, check whether shell step has run, and touch breakpoint file
@@ -350,7 +339,7 @@ FOR:
 				ContainerName: pod.Spec.Containers[0].Name,
 				Command:       []string{"sh", "-c", cmd},
 			}
-			_, stderr, success, _ := podexec.KubeExec(clientSet, restConfig, opt)
+			_, stderr, success, _ := podexec.KubeExec(jobTaskSpec.Properties.ClusterID, opt)
 			logger.Errorf("set workflowTaskV4 breakpoint exec %s error: %s", cmd, stderr)
 			return success
 		}
@@ -443,20 +432,10 @@ FOR:
 		return e.ErrStopDebugShell.AddDesc("结束调试意外失败")
 	}
 
-	kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), jobTaskSpec.Properties.ClusterID)
+	kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(jobTaskSpec.Properties.ClusterID)
 	if err != nil {
 		logger.Errorf("stop workflowTaskV4 debug shell failed: get kube client error: %s", err)
 		return e.ErrSetBreakpoint.AddDesc("结束调试意外失败: get kube client")
-	}
-	clientSet, err := kubeclient.GetClientset(config.HubServerAddress(), jobTaskSpec.Properties.ClusterID)
-	if err != nil {
-		logger.Errorf("stop workflowTaskV4 debug shell failed: get kube client set error: %s", err)
-		return e.ErrSetBreakpoint.AddDesc("结束调试意外失败: get kube client set")
-	}
-	restConfig, err := kubeclient.GetRESTConfig(config.HubServerAddress(), jobTaskSpec.Properties.ClusterID)
-	if err != nil {
-		logger.Errorf("stop workflowTaskV4 debug shell failed: get kube rest config error: %s", err)
-		return e.ErrSetBreakpoint.AddDesc("结束调试意外失败: get kube rest config")
 	}
 
 	pods, err := getter.ListPods(jobTaskSpec.Properties.Namespace, labels.Set{"job-name": task.K8sJobName}.AsSelector(), kubeClient)
@@ -482,7 +461,7 @@ FOR:
 			ContainerName: pod.Spec.Containers[0].Name,
 			Command:       []string{"sh", "-c", cmd},
 		}
-		_, stderr, success, _ := podexec.KubeExec(clientSet, restConfig, opt)
+		_, stderr, success, _ := podexec.KubeExec(jobTaskSpec.Properties.ClusterID, opt)
 		if stderr != "" {
 			logger.Errorf("stop workflowTaskV4 debug shell exec %s error: %s", cmd, stderr)
 		}
@@ -574,9 +553,14 @@ func (c *workflowCtl) updateWorkflowTask() {
 	}
 
 	c.workflowTask.Remark = ""
+
+	c.workflowTaskMutex.Lock()
 	if err := commonrepo.NewworkflowTaskv4Coll().Update(c.workflowTask.ID.Hex(), c.workflowTask); err != nil {
+		c.workflowTaskMutex.Unlock()
 		c.logger.Errorf("update workflow task v4 failed,error: %v", err)
+		return
 	}
+	c.workflowTaskMutex.Unlock()
 
 	if c.workflowTask.Status == config.StatusPassed || c.workflowTask.Status == config.StatusFailed || c.workflowTask.Status == config.StatusTimeout || c.workflowTask.Status == config.StatusCancelled || c.workflowTask.Status == config.StatusReject || c.workflowTask.Status == config.StatusPause {
 		c.logger.Infof("%s:%d:%v task done", c.workflowTask.WorkflowName, c.workflowTask.TaskID, c.workflowTask.Status)
@@ -607,12 +591,12 @@ func (c *workflowCtl) CleanShareStorage() {
 		if clusterID == setting.LocalClusterID || clusterID == "" {
 			namespace = config.Namespace()
 		}
-		kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), clusterID)
+		kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(clusterID)
 		if err != nil {
 			c.logger.Errorf("can't init k8s client: %v", err)
 			continue
 		}
-		kubeApiServer, err := kubeclient.GetKubeAPIReader(config.HubServerAddress(), clusterID)
+		kubeApiServer, err := clientmanager.NewKubeClientManager().GetControllerRuntimeAPIReader(clusterID)
 		if err != nil {
 			c.logger.Errorf("can't init k8s api reader: %v", err)
 			continue
@@ -641,8 +625,8 @@ func (c *workflowCtl) CleanShareStorage() {
 }
 
 func (c *workflowCtl) addClusterID(clusterID string) {
-	c.clusterIDMutex.Lock()
-	defer c.clusterIDMutex.Unlock()
+	c.workflowTaskMutex.Lock()
+	defer c.workflowTaskMutex.Unlock()
 	c.workflowTask.ClusterIDMap[clusterID] = true
 }
 
@@ -652,8 +636,8 @@ const (
 )
 
 func (c *workflowCtl) getGlobalContextAll() map[string]string {
-	c.globalContextMutex.RLock()
-	defer c.globalContextMutex.RUnlock()
+	c.workflowTaskMutex.RLock()
+	defer c.workflowTaskMutex.RUnlock()
 	res := make(map[string]string, len(c.workflowTask.GlobalContext))
 	for k, v := range c.workflowTask.GlobalContext {
 		k = strings.Join(strings.Split(k, split), ".")
@@ -663,21 +647,21 @@ func (c *workflowCtl) getGlobalContextAll() map[string]string {
 }
 
 func (c *workflowCtl) getGlobalContext(key string) (string, bool) {
-	c.globalContextMutex.RLock()
-	defer c.globalContextMutex.RUnlock()
+	c.workflowTaskMutex.RLock()
+	defer c.workflowTaskMutex.RUnlock()
 	v, existed := c.workflowTask.GlobalContext[GetContextKey(key)]
 	return v, existed
 }
 
 func (c *workflowCtl) setGlobalContext(key, value string) {
-	c.globalContextMutex.Lock()
-	defer c.globalContextMutex.Unlock()
+	c.workflowTaskMutex.Lock()
+	defer c.workflowTaskMutex.Unlock()
 	c.workflowTask.GlobalContext[GetContextKey(key)] = value
 }
 
 func (c *workflowCtl) globalContextEach(f func(k, v string) bool) {
-	c.globalContextMutex.RLock()
-	defer c.globalContextMutex.RUnlock()
+	c.workflowTaskMutex.RLock()
+	defer c.workflowTaskMutex.RUnlock()
 	for k, v := range c.workflowTask.GlobalContext {
 		k = strings.Join(strings.Split(k, split), ".")
 		if !f(k, v) {

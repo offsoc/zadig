@@ -19,6 +19,7 @@ package kube
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -33,13 +34,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
-	config2 "github.com/koderover/zadig/v2/pkg/config"
-	pkgconfig "github.com/koderover/zadig/v2/pkg/config"
+	configbase "github.com/koderover/zadig/v2/pkg/config"
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/models"
 	commonmodels "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/models"
@@ -47,26 +45,17 @@ import (
 	commonrepo "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/mongodb"
 	"github.com/koderover/zadig/v2/pkg/setting"
 	aslanClient "github.com/koderover/zadig/v2/pkg/shared/client/aslan"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"github.com/koderover/zadig/v2/pkg/tool/crypto"
 	e "github.com/koderover/zadig/v2/pkg/tool/errors"
-	"github.com/koderover/zadig/v2/pkg/tool/kube/informer"
+	redisEventBus "github.com/koderover/zadig/v2/pkg/tool/eventbus/redis"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/multicluster"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
 	"github.com/koderover/zadig/v2/pkg/types"
 )
 
 func GetKubeAPIReader(clusterID string) (client.Reader, error) {
-	return kubeclient.GetKubeAPIReader(config.HubServerAddress(), clusterID)
-}
-
-func GetRESTConfig(clusterID string) (*rest.Config, error) {
-	return kubeclient.GetRESTConfig(config.HubServerAddress(), clusterID)
-}
-
-// GetClientset returns a client to interact with APIServer which implements kubernetes.Interface
-func GetClientset(clusterID string) (kubernetes.Interface, error) {
-	return kubeclient.GetClientset(config.HubServerAddress(), clusterID)
+	return clientmanager.NewKubeClientManager().GetControllerRuntimeAPIReader(clusterID)
 }
 
 type Service struct {
@@ -139,7 +128,7 @@ func (s *Service) CreateCluster(cluster *models.K8SCluster, id string, logger *z
 		// resource: Namespace: koderover-agent | Service: dind | StatefulSet: dind
 		if cluster.AdvancedConfig != nil && cluster.AdvancedConfig.ScheduleWorkflow {
 			// since we will always be able to connect with direct connection
-			err := InitializeExternalCluster(config.HubServerAddress(), cluster.ID.Hex())
+			err := InitializeExternalCluster(cluster.ID.Hex())
 			if err != nil {
 				return nil, err
 			}
@@ -175,11 +164,6 @@ func (s *Service) CreateCluster(cluster *models.K8SCluster, id string, logger *z
 }
 
 func (s *Service) UpdateCluster(id string, cluster *models.K8SCluster, logger *zap.SugaredLogger) (*models.K8SCluster, error) {
-	origCluster, err := s.coll.Get(id)
-	if err != nil {
-		return nil, e.ErrUpdateCluster.AddErr(e.ErrClusterNotFound.AddDesc(cluster.Name))
-	}
-
 	if existed, err := s.coll.HasDuplicateName(id, cluster.Name); existed || err != nil {
 		if err != nil {
 			logger.Warnf("failed to find duplicated name %v", err)
@@ -188,16 +172,12 @@ func (s *Service) UpdateCluster(id string, cluster *models.K8SCluster, logger *z
 		return nil, e.ErrUpdateCluster.AddDesc(e.DuplicateClusterNameFound)
 	}
 
-	if origCluster.Type == setting.KubeConfigClusterType && origCluster.KubeConfig != cluster.KubeConfig {
-		envs, err := mongodb.NewProductColl().List(&commonrepo.ProductListOptions{
-			ClusterID: id,
-		})
-		if err != nil {
-			return nil, e.ErrUpdateCluster.AddErr(fmt.Errorf("failed to list envs by clusterID %s, err %v", id, err))
-		}
-		for _, env := range envs {
-			informer.DeleteInformer(env.ClusterID, env.Namespace)
-		}
+	eb := redisEventBus.New(configbase.RedisCommonCacheTokenDB())
+
+	err := eb.Publish(setting.EventBusChannelClusterUpdate, id)
+	if err != nil {
+		logger.Errorf("failed to update cluster by id: %s, failed to publish deletion info to eventbus, error: %s", id, err)
+		return nil, fmt.Errorf("failed to update cluster by id: %s, failed to publish deletion info to eventbus, error: %s", id, err)
 	}
 
 	err = s.coll.UpdateMutableFields(cluster, id)
@@ -215,22 +195,15 @@ func (s *Service) UpdateCluster(id string, cluster *models.K8SCluster, logger *z
 }
 
 func (s *Service) DeleteCluster(user string, id string, logger *zap.SugaredLogger) error {
-	//clusterInfo, err := s.coll.Get(id)
-	//if err != nil {
-	//	return e.ErrDeleteCluster.AddErr(e.ErrClusterNotFound.AddDesc(id))
-	//}
+	eb := redisEventBus.New(configbase.RedisCommonCacheTokenDB())
 
-	// Now we only clear the cluster resources when the cluster is using a kubeconfig
-	// This logic is required if the cluster need to be re-applied to Zadig.
-	// 2023-12-06 this logic is removed. Cluster resource under koderover-agent ns is no longer maintained
-	//if clusterInfo.Type == setting.KubeConfigClusterType {
-	//	err = RemoveClusterResources(config.HubServerAddress(), id)
-	//	if err != nil {
-	//		return e.ErrDeleteCluster.AddDesc(err.Error())
-	//	}
-	//}
+	err := eb.Publish(setting.EventBusChannelClusterUpdate, id)
+	if err != nil {
+		logger.Errorf("failed to delete cluster by id: %s, failed to publish deletion info to eventbus, error: %s", id, err)
+		return fmt.Errorf("failed to delete cluster by id: %s, failed to publish deletion info to eventbus, error: %s", id, err)
+	}
 
-	err := s.coll.Delete(id)
+	err = s.coll.Delete(id)
 	if err != nil {
 		logger.Errorf("failed to delete cluster by id %s %v", id, err)
 		return e.ErrDeleteCluster.AddErr(err)
@@ -362,7 +335,7 @@ func (s *Service) GetYaml(id, agentImage, aslanURL, hubURI string, useDeployment
 			HubAgentImage:        agentImage,
 			ClientToken:          token,
 			HubServerBaseAddr:    hubBase.String(),
-			AslanBaseAddr:        config2.SystemAddress(),
+			AslanBaseAddr:        configbase.SystemAddress(),
 			UseDeployment:        useDeployment,
 			DindReplicas:         dindReplicas,
 			DindLimitsCPU:        dindLimitsCPU,
@@ -374,14 +347,15 @@ func (s *Service) GetYaml(id, agentImage, aslanURL, hubURI string, useDeployment
 			ScheduleWorkflow:     scheduleWorkflow,
 			EnableIRSA:           cluster.AdvancedConfig.EnableIRSA,
 			IRSARoleARN:          cluster.AdvancedConfig.IRSARoleARM,
-			ImagePullPolicy:      config2.ImagePullPolicy(),
+			ImagePullPolicy:      configbase.ImagePullPolicy(),
+			SecretKey:            base64.StdEncoding.EncodeToString([]byte(configbase.SecretKey())),
 		})
 	} else {
 		err = YamlTemplateForNamespace.Execute(buffer, TemplateSchema{
 			HubAgentImage:        agentImage,
 			ClientToken:          token,
 			HubServerBaseAddr:    hubBase.String(),
-			AslanBaseAddr:        config2.SystemAddress(),
+			AslanBaseAddr:        configbase.SystemAddress(),
 			UseDeployment:        useDeployment,
 			Namespace:            cluster.Namespace,
 			DindReplicas:         dindReplicas,
@@ -393,7 +367,8 @@ func (s *Service) GetYaml(id, agentImage, aslanURL, hubURI string, useDeployment
 			DindStorageSizeInGiB: dindStorageSizeInGiB,
 			EnableIRSA:           cluster.AdvancedConfig.EnableIRSA,
 			IRSARoleARN:          cluster.AdvancedConfig.IRSARoleARM,
-			ImagePullPolicy:      config2.ImagePullPolicy(),
+			ImagePullPolicy:      configbase.ImagePullPolicy(),
+			SecretKey:            base64.StdEncoding.EncodeToString([]byte(configbase.SecretKey())),
 		})
 	}
 
@@ -450,8 +425,8 @@ func getDindCfg(cluster *models.K8SCluster) (replicas int, limitsCPU, limitsMemo
 // Namespace: koderover-agent
 // Service: dind
 // StatefulSet: dind
-func InitializeExternalCluster(hubserverAddr, clusterID string) error {
-	clientset, err := kubeclient.GetKubeClientSet(hubserverAddr, clusterID)
+func InitializeExternalCluster(clusterID string) error {
+	clientset, err := clientmanager.NewKubeClientManager().GetKubernetesClientSet(clusterID)
 	if err != nil {
 		return err
 	}
@@ -495,7 +470,7 @@ func InitializeExternalCluster(hubserverAddr, clusterID string) error {
 		},
 	}
 
-	cluster, err := aslanClient.New(pkgconfig.AslanServiceAddress()).GetClusterInfo(clusterID)
+	cluster, err := aslanClient.New(configbase.AslanServiceAddress()).GetClusterInfo(clusterID)
 	if err != nil {
 		return err
 	}
@@ -637,29 +612,11 @@ func InitializeExternalCluster(hubserverAddr, clusterID string) error {
 	return nil
 }
 
-// RemoveClusterResources Removes all the resources in the koderover-agent namespace along with the namespace itself
-func RemoveClusterResources(hubserverAddr, clusterID string) error {
-	clientset, err := kubeclient.GetKubeClientSet(hubserverAddr, clusterID)
+func UpdateClusterHandler(message string) {
+	err := clientmanager.NewKubeClientManager().Clear(message)
 	if err != nil {
-		return err
+		log.Errorf("failed to clear old cache for clusterID: %s, error: %s", message, err)
 	}
-
-	err = clientset.CoreV1().Services("koderover-agent").Delete(context.TODO(), "dind", metav1.DeleteOptions{})
-	if err != nil {
-		log.Errorf("failed to delete dind service, err: %s", err)
-	}
-
-	err = clientset.AppsV1().StatefulSets("koderover-agent").Delete(context.TODO(), "dind", metav1.DeleteOptions{})
-	if err != nil {
-		log.Errorf("failed to delete dind statefulset, err: %s", err)
-	}
-
-	err = clientset.CoreV1().Namespaces().Delete(context.TODO(), "koderover-agent", metav1.DeleteOptions{})
-	if err != nil {
-		log.Errorf("failed to delete koderover-agent ns, err: %s", err)
-	}
-
-	return nil
 }
 
 func ValidateClusterRoleYAML(k8sYaml string, logger *zap.SugaredLogger) error {
@@ -705,6 +662,7 @@ type TemplateSchema struct {
 	EnableIRSA           bool
 	IRSARoleARN          string
 	ImagePullPolicy      string
+	SecretKey            string
 }
 
 const (
@@ -724,6 +682,17 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: koderover-agent
+
+---
+
+apiVersion: v1
+data:
+  aesKey: {{.SecretKey}}
+kind: Secret
+metadata:
+  name: zadig-aes-key
+  namespace: koderover-agent
+type: Opaque
 
 ---
 
@@ -810,6 +779,11 @@ spec:
         image: {{.HubAgentImage}}
         imagePullPolicy: {{.ImagePullPolicy}}
         env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              key: aesKey
+              name: zadig-aes-key
         - name: AGENT_NODE_NAME
           valueFrom:
             fieldRef:
@@ -848,6 +822,16 @@ metadata:
 
 ---
 
+apiVersion: v1
+data:
+  aesKey: {{.SecretKey}}
+kind: Secret
+metadata:
+  name: zadig-aes-key
+  namespace: {{.Namespace}}
+type: Opaque
+
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -977,6 +961,11 @@ spec:
         image: {{.HubAgentImage}}
         imagePullPolicy: {{.ImagePullPolicy}}
         env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              key: aesKey
+              name: zadig-aes-key
         - name: AGENT_NODE_NAME
           valueFrom:
             fieldRef:

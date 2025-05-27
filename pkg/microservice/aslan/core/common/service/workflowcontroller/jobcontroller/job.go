@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -137,6 +138,18 @@ func runJob(ctx context.Context, job *commonmodels.JobTask, workflowCtx *commonm
 		}
 		return true
 	})
+
+	// remove all the unrendered variable, replacing then with empty string
+	b, _ := json.Marshal(job)
+	variableRegexp := regexp.MustCompile(config.VariableRegEx)
+	replacedJob := variableRegexp.ReplaceAll(b, []byte(""))
+	if err := json.Unmarshal([]byte(replacedJob), &job); err != nil {
+		logger.Errorf("unmarshal job error: %v", err)
+		job.Status = config.StatusFailed
+		job.Error = err.Error()
+		return
+	}
+
 	job.Status = config.StatusPrepare
 	job.StartTime = time.Now().Unix()
 	job.K8sJobName = getJobName(workflowCtx.WorkflowName, workflowCtx.TaskID)
@@ -182,6 +195,7 @@ func runJob(ctx context.Context, job *commonmodels.JobTask, workflowCtx *commonm
 func retryJob(ctx context.Context, workflowName string, taskID int64, job *commonmodels.JobTask, jobCtl JobCtl, ack func(), maxRetry int) {
 	retryCount := 1
 
+retryLoop:
 	for retryCount <= maxRetry {
 		select {
 		case <-ctx.Done():
@@ -199,7 +213,7 @@ func retryJob(ctx context.Context, workflowName string, taskID int64, job *commo
 			jobCtl.Run(ctx)
 
 			if job.Status == config.StatusPassed {
-				break
+				break retryLoop
 			}
 
 			retryCount++

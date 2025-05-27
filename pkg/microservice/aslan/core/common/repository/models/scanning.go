@@ -17,6 +17,7 @@
 package models
 
 import (
+	"github.com/koderover/zadig/v2/pkg/util"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
@@ -42,7 +43,7 @@ type Scanning struct {
 	// Parameter is for sonarQube type only
 	Parameter string `bson:"parameter" json:"parameter"`
 	// Envs is the user defined key/values
-	Envs []*KeyVal `bson:"envs" json:"envs"`
+	Envs KeyValList `bson:"envs" json:"envs"`
 	// Script is for other type only
 	ScriptType       types.ScriptType         `bson:"script_type"           json:"script_type"`
 	Script           string                   `bson:"script"                json:"script"`
@@ -60,16 +61,19 @@ func (Scanning) TableName() string {
 }
 
 type ScanningAdvancedSetting struct {
-	ArtifactPaths    []string              `bson:"artifact_paths"    json:"artifact_paths"`
-	ClusterID        string                `bson:"cluster_id"        json:"cluster_id"`
-	StrategyID       string                `bson:"strategy_id"       json:"strategy_id"`
-	Timeout          int64                 `bson:"timeout"           json:"timeout"`
-	ResReq           setting.Request       `bson:"res_req"           json:"res_req"`
-	ResReqSpec       setting.RequestSpec   `bson:"res_req_spec"      json:"res_req_spec"`
-	HookCtl          *ScanningHookCtl      `bson:"hook_ctl"          json:"hook_ctl"`
-	NotifyCtls       []*NotifyCtl          `bson:"notify_ctls"       json:"notify_ctls"`
-	Cache            *ScanningCacheSetting `bson:"cache"             json:"cache"`
-	ConcurrencyLimit int                   `bson:"concurrency_limit" json:"concurrency_limit"`
+	ArtifactPaths     []string              `bson:"artifact_paths"    json:"artifact_paths"`
+	ClusterID         string                `bson:"cluster_id"        json:"cluster_id"`
+	ClusterSource     string                `bson:"cluster_source"    json:"cluster_source"`
+	StrategyID        string                `bson:"strategy_id"       json:"strategy_id"`
+	Timeout           int64                 `bson:"timeout"           json:"timeout"`
+	ResReq            setting.Request       `bson:"res_req"           json:"res_req"`
+	ResReqSpec        setting.RequestSpec   `bson:"res_req_spec"      json:"res_req_spec"`
+	HookCtl           *ScanningHookCtl      `bson:"hook_ctl"          json:"hook_ctl"`
+	NotifyCtls        []*NotifyCtl          `bson:"notify_ctls"       json:"notify_ctls"`
+	Cache             *ScanningCacheSetting `bson:"cache"             json:"cache"`
+	ConcurrencyLimit  int                   `bson:"concurrency_limit" json:"concurrency_limit"`
+	CustomAnnotations []*util.KeyValue      `bson:"custom_annotations" json:"custom_annotations"`
+	CustomLabels      []*util.KeyValue      `bson:"custom_labels"      json:"custom_labels"`
 }
 
 type ScanningHookCtl struct {

@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -34,7 +35,6 @@ import (
 	commonmodels "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/models"
 	commonrepo "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/mongodb"
 	"github.com/koderover/zadig/v2/pkg/setting"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
 	"github.com/koderover/zadig/v2/pkg/shared/kube/wrapper"
 	"github.com/koderover/zadig/v2/pkg/tool/cache"
 	e "github.com/koderover/zadig/v2/pkg/tool/errors"
@@ -51,6 +51,7 @@ const (
 	CleanStatusSuccess  = "success"
 	CleanStatusCleaning = "cleaning"
 	CleanStatusFailed   = "failed"
+	CleanStatusTimeout  = "timeout"
 )
 
 // SetCron set the docker clean cron
@@ -152,7 +153,7 @@ func CleanImageCache(logger *zap.SugaredLogger) error {
 	// Note: Since the total number of dind instances of Zadig users will not exceed `50` within one or two years
 	// (at this time, the resource amount may be `200C400GiB`, and the resource cost is too high), concurrency can be
 	// left out of consideration.
-	timeout, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	timeout, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 	res := make(chan *commonmodels.DindClean)
 	go func(ch chan *commonmodels.DindClean) {
@@ -171,6 +172,7 @@ func CleanImageCache(logger *zap.SugaredLogger) error {
 				continue
 			}
 			if !wrapper.Pod(dindPod.Pod).Ready() {
+				log.Errorf("dind pod %s/%s is not ready", dindPod.ClusterName, dindPod.Pod.Name)
 				continue
 			}
 
@@ -212,7 +214,7 @@ func CleanImageCache(logger *zap.SugaredLogger) error {
 	select {
 	case <-timeout.Done():
 		err = commonrepo.NewDindCleanColl().UpdateStatusInfo(&commonmodels.DindClean{
-			Status:         CleanStatusFailed,
+			Status:         CleanStatusTimeout,
 			DindCleanInfos: []*commonmodels.DindCleanInfo{},
 		})
 		if err != nil {
@@ -261,17 +263,7 @@ func GetOrCreateCleanCacheState() (*commonmodels.DindClean, error) {
 }
 
 func dockerPrune(clusterID, namespace, podName string, logger *zap.SugaredLogger) (string, error) {
-	kclient, err := kubeclient.GetClientset(config.HubServerAddress(), clusterID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get clientset for cluster %q: %s", clusterID, err)
-	}
-
-	restConfig, err := kubeclient.GetRESTConfig(config.HubServerAddress(), clusterID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get rest config for cluster %q: %s", clusterID, err)
-	}
-
-	cleanInfo, errString, _, err := podexec.KubeExec(kclient, restConfig, podexec.ExecOptions{
+	cleanInfo, errString, _, err := podexec.KubeExec(clusterID, podexec.ExecOptions{
 		Command:   []string{"docker", "system", "prune", "--volumes", "-a", "-f"},
 		Namespace: namespace,
 		PodName:   podName,
@@ -332,7 +324,7 @@ func getDindPods() ([]types.DindPod, error) {
 }
 
 func getDindPodsInCluster(clusterID, ns string) ([]*corev1.Pod, error) {
-	kclient, err := kubeclient.GetKubeClient(config.HubServerAddress(), clusterID)
+	kclient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(clusterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get kube client for cluster %q: %s", clusterID, err)
 	}

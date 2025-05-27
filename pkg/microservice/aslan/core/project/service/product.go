@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-multierror"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
@@ -54,7 +55,6 @@ import (
 	"github.com/koderover/zadig/v2/pkg/setting"
 	"github.com/koderover/zadig/v2/pkg/shared/client/user"
 	"github.com/koderover/zadig/v2/pkg/shared/handler"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
 	"github.com/koderover/zadig/v2/pkg/shared/kube/resource"
 	"github.com/koderover/zadig/v2/pkg/shared/kube/wrapper"
 	e "github.com/koderover/zadig/v2/pkg/tool/errors"
@@ -142,6 +142,10 @@ func CreateProductTemplate(args *template.Product, log *zap.SugaredLogger) (err 
 		return e.ErrCreateProduct.AddDesc(fmt.Sprintf("failed to initialize project authorization info for project: %s, error: %s", args.ProductName, err))
 	}
 
+	// init sprint template
+	ctx := handler.NewBackgroupContext()
+	sprintservice.InitSprintTemplate(ctx, args.ProductName)
+
 	// add project to current project group
 	if args.GroupName != "" {
 		err = AddProject2CurrentGroup(args.GroupName, args.ProductName, args.ProjectName, args.UpdateBy, args.ProductFeature.DeployType)
@@ -150,10 +154,6 @@ func CreateProductTemplate(args *template.Product, log *zap.SugaredLogger) (err 
 			return e.ErrCreateProduct.AddErr(fmt.Errorf("create project successfully, but failed to add project to current group, please add the project %s to group %s manually, error: %v", args.ProductName, args.GroupName, err))
 		}
 	}
-
-	// init sprint template
-	ctx := handler.NewBackgroupContext()
-	sprintservice.InitSprintTemplate(ctx, args.ProductName)
 
 	return
 }
@@ -383,7 +383,7 @@ func optimizeServiceYaml(projectName string, serviceInfo []*commonmodels.Service
 	k8sNsMap := make(map[string]string)
 	for _, product := range products {
 		k8sNsMap[product.EnvName] = product.Namespace
-		kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), product.ClusterID)
+		kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(product.ClusterID)
 		if err != nil {
 			log.Errorf("failed to init kube client for product %s, err: %s", product.EnvName, err)
 			continue
@@ -502,8 +502,7 @@ func transferProducts(user string, projectInfo *template.Product, templateServic
 
 	// build rendersets and services, set necessary attributes
 	for _, product := range products {
-
-		kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), product.ClusterID)
+		kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(product.ClusterID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate kube client for product %s, error: %s", product.ProductName, err)
 		}
@@ -699,6 +698,12 @@ func DeleteProductTemplate(userName, productName, requestID string, isDelete boo
 	// delete collaboration_mode and collaboration_instance
 	if err := DeleteCollabrationMode(productName, userName, log); err != nil {
 		log.Errorf("DeleteCollabrationMode err:%s", err)
+		return err
+	}
+
+	if err := DeleteProjectCodeHosts(productName); err != nil {
+		err = errors.Wrap(err, "DeleteProjectCodeHosts")
+		log.Error(err)
 		return err
 	}
 

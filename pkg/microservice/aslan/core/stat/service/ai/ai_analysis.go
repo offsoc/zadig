@@ -109,10 +109,16 @@ func AnalyzeProjectStats(args *AiAnalysisReq, logger *zap.SugaredLogger) (*AiAna
 	// the design of the prompt directly determines the quality of the answer
 	if tokenNum > AnalysisModelTokenLimit {
 		prompt = fmt.Sprintf("假设你是Devops专家，需要你根据分析要求分析三重引号分割的项目数据，该数据是多个项目各自的初步分析结果，"+
-			"分析要求:%s;你的回答需要使用text格式输出,输出内容不要包含\"三重引号分割的项目数据\"这个名称,也不要复述分析要求中的内容,在你的回答中禁止包含 "+
+			"分析要求:%s;你的回答需要使用markdown格式输出,输出内容不要包含\"三重引号分割的项目数据\"这个名称,也不要复述分析要求中的内容,在你的回答中禁止包含 "+
 			"\\\"data_description\\\"、\\\"jenkins\\\" 等字段; 项目数据：\"\"\"%s\"\"\"", args.Prompt, overAllInput)
 	}
-	answer, err := client.GetCompletion(context.TODO(), util.RemoveExtraSpaces(prompt), llm.WithTemperature(float32(0.2)), llm.WithModel(AnalysisModel))
+	options := []llm.ParamOption{llm.WithTemperature(float32(0.2))}
+	if client.GetModel() != "" {
+		options = append(options, llm.WithModel(client.GetModel()))
+	} else {
+		options = append(options, llm.WithModel(AnalysisModel))
+	}
+	answer, err := client.GetCompletion(context.TODO(), util.RemoveExtraSpaces(prompt), options...)
 	if err != nil {
 		logger.Errorf("failed to get answer from ai: %v, the error is: %+v", client.GetName(), err)
 		return nil, err
@@ -136,8 +142,14 @@ func AnalyzeProject(userPrompt string, project *ProjectData, client llm.ILLM, an
 		return
 	}
 
-	prompt := fmt.Sprintf("假设你是资深Devops专家，我需要你根据以下分析要求来分析用三重引号分割的项目数据，最后根据你的分析来生成分析报告，分析要求：%s； 项目数据：\"\"\"%s\"\"\";你的回答不能超过400个汉字，同时回答内容要符合text格式，不要存在换行和空行;", util.RemoveExtraSpaces(EveryProjectAnalysisPrompt), string(pData))
-	answer, err := client.GetCompletion(context.TODO(), util.RemoveExtraSpaces(prompt), llm.WithTemperature(float32(0.1)), llm.WithModel(AnalysisModel))
+	prompt := fmt.Sprintf("假设你是资深Devops专家，我需要你根据以下分析要求来分析用三重引号分割的项目数据，最后根据你的分析来生成分析报告，分析要求：%s； 项目数据：\"\"\"%s\"\"\";你的回答不能超过400个汉字，同时回答内容要符合markdown格式，不要存在换行和空行;", util.RemoveExtraSpaces(EveryProjectAnalysisPrompt), string(pData))
+	options := []llm.ParamOption{llm.WithTemperature(float32(0.1))}
+	if client.GetModel() != "" {
+		options = append(options, llm.WithModel(client.GetModel()))
+	} else {
+		options = append(options, llm.WithModel(AnalysisModel))
+	}
+	answer, err := client.GetCompletion(context.TODO(), util.RemoveExtraSpaces(prompt), options...)
 	if err != nil {
 		logger.Errorf("failed to get answer from ai: %v, the error is: %+v", client.GetName(), err)
 		return
@@ -189,7 +201,13 @@ func parseUserPrompt(args *AiAnalysisReq, aiClient llm.ILLM, logger *zap.Sugared
 	}
 
 	prompt := fmt.Sprintf("%s;\"\"\"%s\"\"\"", util.RemoveExtraSpaces(ParseUserPromptPrompt), args.Prompt)
-	resp, err := aiClient.GetCompletion(context.TODO(), prompt)
+	options := []llm.ParamOption{}
+	if aiClient.GetModel() != "" {
+		options = append(options, llm.WithModel(aiClient.GetModel()))
+	} else {
+		options = append(options, llm.WithModel(AnalysisModel))
+	}
+	resp, err := aiClient.GetCompletion(context.TODO(), prompt, options...)
 	if err != nil {
 		return input, fmt.Errorf("failed to get completion, error: %v", err)
 	}
@@ -457,7 +475,13 @@ func AnalyzeMonthAttention(start, end int64, data []*service2.MonthAttention, lo
 	retryTime := 0
 	answer := ""
 	for retryTime < 3 {
-		answer, err = client.GetCompletion(context.TODO(), util.RemoveExtraSpaces(prompt), llm.WithTemperature(float32(0.2)), llm.WithModel(AnalysisModel))
+		options := []llm.ParamOption{llm.WithTemperature(float32(0.2))}
+		if client.GetModel() != "" {
+			options = append(options, llm.WithModel(client.GetModel()))
+		} else {
+			options = append(options, llm.WithModel(AnalysisModel))
+		}
+		answer, err = client.GetCompletion(context.TODO(), util.RemoveExtraSpaces(prompt), options...)
 		if err != nil {
 			retryTime++
 			if strings.Contains(err.Error(), "create chat completion failed") && retryTime < 3 {

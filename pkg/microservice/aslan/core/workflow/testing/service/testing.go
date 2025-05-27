@@ -226,6 +226,7 @@ func ListTestingOpt(productNames []string, testType string, log *zap.SugaredLogg
 	return testingOpts, nil
 }
 
+// @fixme this function has performance issue, need to support get multiple test tasks at once
 func GetTestTask(testName string) (*commonmodels.TestTaskStat, error) {
 	testCustomWorkflowName := commonutil.GenTestingWorkflowName(testName)
 	testTasks, err := commonrepo.NewJobInfoColl().GetTestJobsByWorkflow(testCustomWorkflowName)
@@ -259,7 +260,7 @@ func GetTestTask(testName string) (*commonmodels.TestTaskStat, error) {
 	resp.TotalSuccess = success
 
 	// get latest test result to determine how many cases are there
-	testResults, err := commonrepo.NewCustomWorkflowTestReportColl().ListByWorkflow(testCustomWorkflowName, testName, testTasks[0].TaskID)
+	testResults, err := commonrepo.NewCustomWorkflowTestReportColl().ListByWorkflowJobName(testCustomWorkflowName, testName, testTasks[0].TaskID)
 	if err != nil {
 		log.Errorf("failed to get test report info for test: %s, error: %s", err)
 		resp.TestCaseNum = 0
@@ -508,6 +509,9 @@ func downloadHtmlReportFromJobTask(jobTask *commonmodels.JobTask, projectName, w
 			fpath = filepath.Join(artifact.DestinationPath, fname)
 		}
 
+		fname = commonutil.RenderEnv(fname, jobSpec.Properties.Envs)
+		fpath = commonutil.RenderEnv(fpath, jobSpec.Properties.Envs)
+
 		objectKey := store.GetObjectPath(fpath)
 		downloadDest := filepath.Join(htmlReportPath, fname)
 		err = client.Download(store.Bucket, objectKey, downloadDest)
@@ -526,6 +530,8 @@ func downloadHtmlReportFromJobTask(jobTask *commonmodels.JobTask, projectName, w
 
 		downloadDest := filepath.Join(htmlReportPath, setting.HtmlReportArchivedFileName)
 		objectKey := filepath.Join(stepSpec.S3DestDir, stepSpec.FileName)
+		objectKey = commonutil.RenderEnv(objectKey, jobSpec.Properties.Envs)
+
 		err = client.Download(store.Bucket, objectKey, downloadDest)
 		if err != nil {
 			err = fmt.Errorf("download html test report error: %s", err)
@@ -545,6 +551,7 @@ func downloadHtmlReportFromJobTask(jobTask *commonmodels.JobTask, projectName, w
 		}
 
 		unTarFilePath := filepath.Join(htmlReportPath, stepSpec.ResultDirs[0])
+		unTarFilePath = commonutil.RenderEnv(unTarFilePath, jobSpec.Properties.Envs)
 		unTarFileInfo, err := os.Stat(unTarFilePath)
 		if err != nil {
 			err = fmt.Errorf("failed to stat untar files %s, err: %v", unTarFilePath, err)

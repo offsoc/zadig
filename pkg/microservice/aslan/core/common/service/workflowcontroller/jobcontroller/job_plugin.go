@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	crClient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	zadigconfig "github.com/koderover/zadig/v2/pkg/config"
@@ -32,7 +30,6 @@ import (
 	commonmodels "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/models"
 	commonrepo "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/mongodb"
 	"github.com/koderover/zadig/v2/pkg/setting"
-	krkubeclient "github.com/koderover/zadig/v2/pkg/tool/kube/client"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/updater"
 )
 
@@ -41,8 +38,6 @@ type PluginJobCtl struct {
 	workflowCtx *commonmodels.WorkflowTaskCtx
 	logger      *zap.SugaredLogger
 	kubeclient  crClient.Client
-	clientset   kubernetes.Interface
-	restConfig  *rest.Config
 	apiServer   crClient.Reader
 	jobTaskSpec *commonmodels.JobTaskPluginSpec
 	ack         func()
@@ -91,34 +86,38 @@ func (c *PluginJobCtl) Run(ctx context.Context) {
 
 func (c *PluginJobCtl) run(ctx context.Context) error {
 	// get kube client
-	hubServerAddr := config.HubServerAddress()
-	switch c.jobTaskSpec.Properties.ClusterID {
-	case setting.LocalClusterID:
+	hubServerAddr := zadigconfig.HubServerServiceAddress()
+	if c.jobTaskSpec.Properties.ClusterID == setting.LocalClusterID {
 		c.jobTaskSpec.Properties.Namespace = zadigconfig.Namespace()
-		c.kubeclient = krkubeclient.Client()
-		c.clientset = krkubeclient.Clientset()
-		c.restConfig = krkubeclient.RESTConfig()
-		c.apiServer = krkubeclient.APIReader()
-	default:
+	} else {
 		c.jobTaskSpec.Properties.Namespace = setting.AttachedClusterNamespace
-
-		crClient, clientset, restConfig, apiServer, err := GetK8sClients(hubServerAddr, c.jobTaskSpec.Properties.ClusterID)
-		if err != nil {
-			logError(c.job, err.Error(), c.logger)
-			return err
-		}
-		c.kubeclient = crClient
-		c.clientset = clientset
-		c.restConfig = restConfig
-		c.apiServer = apiServer
 	}
+
+	crClient, _, apiServer, err := GetK8sClients(hubServerAddr, c.jobTaskSpec.Properties.ClusterID)
+	if err != nil {
+		logError(c.job, err.Error(), c.logger)
+		return err
+	}
+	c.kubeclient = crClient
+	c.apiServer = apiServer
 
 	jobLabel := &JobLabel{
 		JobType: string(c.job.JobType),
 		JobName: c.job.K8sJobName,
 	}
 	c.jobTaskSpec.Properties.Registries = getMatchedRegistries(c.jobTaskSpec.Plugin.Image, c.jobTaskSpec.Properties.Registries)
-	job, err := buildPlainJob(c.job.K8sJobName, c.jobTaskSpec.Properties.ResourceRequest, c.jobTaskSpec.Properties.ResReqSpec, c.job, c.jobTaskSpec, c.workflowCtx)
+
+	customAnnotation := make(map[string]string)
+	customLabel := make(map[string]string)
+
+	for _, lb := range c.jobTaskSpec.Properties.CustomLabels {
+		customLabel[lb.Key] = lb.Value.(string)
+	}
+	for _, annotate := range c.jobTaskSpec.Properties.CustomAnnotations {
+		customAnnotation[annotate.Key] = annotate.Value.(string)
+	}
+
+	job, err := buildPlainJob(c.job.K8sJobName, c.jobTaskSpec.Properties.ResourceRequest, c.jobTaskSpec.Properties.ResReqSpec, c.job, c.jobTaskSpec, c.workflowCtx, customLabel, customAnnotation)
 	if err != nil {
 		msg := fmt.Sprintf("create job context error: %v", err)
 		logError(c.job, msg, c.logger)

@@ -316,7 +316,7 @@ func OpenAPIListBuildModules(projectName string, pageNum, pageSize int64, logger
 	return resp, nil
 }
 
-func OpenAPIGetBuildModule(name, projectName string, logger *zap.SugaredLogger) (*OpenAPIBuildDetailResp, error) {
+func OpenAPIGetBuildModule(name, serviceName, serviceModule, projectName string, logger *zap.SugaredLogger) (*OpenAPIBuildDetailResp, error) {
 	opt := &commonrepo.BuildFindOption{
 		Name:        name,
 		ProductName: projectName,
@@ -348,18 +348,53 @@ func OpenAPIGetBuildModule(name, projectName string, logger *zap.SugaredLogger) 
 	}
 
 	resp.Repos = make([]*OpenAPIRepo, 0)
-	for _, rp := range build.Repos {
-		repo := &OpenAPIRepo{
-			RepoName:     rp.RepoName,
-			Branch:       rp.Branch,
-			Source:       rp.Source,
-			RepoOwner:    rp.RepoOwner,
-			RemoteName:   rp.RemoteName,
-			CheckoutPath: rp.CheckoutPath,
-			Submodules:   rp.SubModules,
-			Hidden:       rp.Hidden,
+	if serviceName == "" || serviceModule == "" || build.TemplateID == "" {
+		for _, rp := range build.Repos {
+			repo := &OpenAPIRepo{
+				RepoName:     rp.RepoName,
+				Branch:       rp.Branch,
+				Source:       rp.Source,
+				RepoOwner:    rp.RepoOwner,
+				RemoteName:   rp.RemoteName,
+				CheckoutPath: rp.CheckoutPath,
+				Submodules:   rp.SubModules,
+				Hidden:       rp.Hidden,
+			}
+			resp.Repos = append(resp.Repos, repo)
 		}
-		resp.Repos = append(resp.Repos, repo)
+	} else {
+		for _, svcBuild := range build.Targets {
+			if svcBuild.ServiceName == serviceName && svcBuild.ServiceModule == serviceModule {
+				for _, rp := range svcBuild.Repos {
+					repo := &OpenAPIRepo{
+						RepoName:     rp.RepoName,
+						Branch:       rp.Branch,
+						Source:       rp.Source,
+						RepoOwner:    rp.RepoOwner,
+						RemoteName:   rp.RemoteName,
+						CheckoutPath: rp.CheckoutPath,
+						Submodules:   rp.SubModules,
+						Hidden:       rp.Hidden,
+					}
+					resp.Repos = append(resp.Repos, repo)
+				}
+
+				for _, kv := range svcBuild.Envs {
+					newKV := &commonmodels.ServiceKeyVal{
+						Key:          kv.Key,
+						Value:        kv.Value,
+						Type:         kv.Type,
+						ChoiceOption: kv.ChoiceOption,
+						ChoiceValue:  kv.ChoiceValue,
+						IsCredential: kv.IsCredential,
+					}
+
+					resp.Parameters = append(resp.Parameters, newKV)
+				}
+
+				break
+			}
+		}
 	}
 
 	resp.TargetServices = make([]*commonmodels.ServiceWithModule, 0)
@@ -407,15 +442,18 @@ func OpenAPIGetBuildModule(name, projectName string, logger *zap.SugaredLogger) 
 		CacheDir: build.CacheUserDir,
 	}
 
-	resp.Parameters = make([]*commonmodels.ServiceKeyVal, 0)
-	for _, kv := range build.PreBuild.Envs {
-		resp.Parameters = append(resp.Parameters, &commonmodels.ServiceKeyVal{
-			Key:          kv.Key,
-			Value:        kv.Value,
-			Type:         kv.Type,
-			IsCredential: kv.IsCredential,
-		})
+	if len(resp.Parameters) == 0 {
+		resp.Parameters = make([]*commonmodels.ServiceKeyVal, 0)
+		for _, kv := range build.PreBuild.Envs {
+			resp.Parameters = append(resp.Parameters, &commonmodels.ServiceKeyVal{
+				Key:          kv.Key,
+				Value:        kv.Value,
+				Type:         kv.Type,
+				IsCredential: kv.IsCredential,
+			})
+		}
 	}
+
 	resp.Outputs = build.Outputs
 
 	resp.PostBuild = build.PostBuild

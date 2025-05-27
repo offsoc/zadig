@@ -155,7 +155,10 @@ func SetCurrentContainerImages(args *commonmodels.Service) error {
 				return errors.New("nil Resource Kind")
 			}
 
-			if resKind.Kind == setting.Deployment || resKind.Kind == setting.StatefulSet || resKind.Kind == setting.Job {
+			if resKind.Kind == setting.Deployment ||
+				resKind.Kind == setting.StatefulSet ||
+				resKind.Kind == setting.Job ||
+				resKind.Kind == setting.CloneSet {
 				containers, err := getContainers(yamlData)
 				if err != nil {
 					return fmt.Errorf("GetContainers error: %v", err)
@@ -355,7 +358,7 @@ func parseImagesByPattern(nested map[string]interface{}, patterns []map[string]s
 	ret := make([]*commonmodels.Container, 0)
 	usedImagePath := sets.NewString()
 	for _, searchResult := range matchedPath {
-		uniquePath := generateUniquePath(searchResult)
+		uniquePath := GenerateUniquePath(searchResult)
 		if usedImagePath.Has(uniquePath) {
 			continue
 		}
@@ -411,7 +414,7 @@ func GetPresetRules() []*templatemodels.ImageSearchingRule {
 	return ret
 }
 
-func generateUniquePath(pathData map[string]string) string {
+func GenerateUniquePath(pathData map[string]string) string {
 	keys := []string{setting.PathSearchComponentRepo, setting.PathSearchComponentNamespace, setting.PathSearchComponentImage, setting.PathSearchComponentTag}
 	values := make([]string, 0)
 	for _, key := range keys {

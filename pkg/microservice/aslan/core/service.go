@@ -23,14 +23,14 @@ import (
 	"sync"
 	"time"
 
-	newgoCron "github.com/go-co-op/gocron"
+	newgoCron "github.com/go-co-op/gocron/v2"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/hashicorp/go-multierror"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	client2 "sigs.k8s.io/controller-runtime/pkg/client"
+	controllerRuntimeClient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	commonconfig "github.com/koderover/zadig/v2/pkg/config"
 	configbase "github.com/koderover/zadig/v2/pkg/config"
@@ -38,6 +38,7 @@ import (
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/kube"
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/webhook"
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/workflowcontroller"
+	commonutil "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/util"
 	environmentservice "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/environment/service"
 	multiclusterservice "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/multicluster/service"
 	releaseplanservice "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/release_plan/service"
@@ -48,11 +49,11 @@ import (
 	"github.com/koderover/zadig/v2/pkg/microservice/hubserver/core/repository/mongodb"
 	mongodb2 "github.com/koderover/zadig/v2/pkg/microservice/systemconfig/core/codehost/repository/mongodb"
 	"github.com/koderover/zadig/v2/pkg/setting"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
+	redisEventBus "github.com/koderover/zadig/v2/pkg/tool/eventbus/redis"
 	"github.com/koderover/zadig/v2/pkg/tool/git/gitlab"
 	gormtool "github.com/koderover/zadig/v2/pkg/tool/gorm"
 	"github.com/koderover/zadig/v2/pkg/tool/klock"
-	"github.com/koderover/zadig/v2/pkg/tool/kube/multicluster"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
 	mongotool "github.com/koderover/zadig/v2/pkg/tool/mongo"
 	"github.com/koderover/zadig/v2/pkg/tool/rsa"
@@ -87,11 +88,11 @@ func StartControllers(stopCh <-chan struct{}) {
 }
 
 func initRsaKey() {
-	client, err := kubeclient.GetKubeClient(commonconfig.HubServerServiceAddress(), setting.LocalClusterID)
+	client, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(setting.LocalClusterID)
 	if err != nil {
 		log.DPanic(err)
 	}
-	clientset, err := kubeclient.GetKubeClientSet(config.HubServerAddress(), setting.LocalClusterID)
+	clientset, err := clientmanager.NewKubeClientManager().GetKubernetesClientSet(setting.LocalClusterID)
 	if err != nil {
 		log.DPanic(err)
 	}
@@ -146,6 +147,8 @@ func Start(ctx context.Context) {
 	initRsaKey()
 
 	initCron()
+
+	initEventBusSubscription()
 }
 
 func Stop(ctx context.Context) {
@@ -156,9 +159,13 @@ func Stop(ctx context.Context) {
 var Scheduler *newgoCron.Scheduler
 
 func initCron() {
-	Scheduler = newgoCron.NewScheduler(time.Local)
+	Scheduler, err := newgoCron.NewScheduler()
+	if err != nil {
+		log.Fatalf("failed to create scheduler: %v", err)
+		return
+	}
 
-	Scheduler.Every(5).Minutes().Do(func() {
+	Scheduler.NewJob(newgoCron.DurationJob(5*time.Minute), newgoCron.NewTask(func() {
 		log.Infof("[CRONJOB] updating tokens for gitlab....")
 		codehostList, err := mongodb2.NewCodehostColl().List(&mongodb2.ListArgs{
 			Source: "gitlab",
@@ -175,11 +182,11 @@ func initCron() {
 			}
 		}
 		log.Infof("[CRONJOB] gitlab token updated....")
-	})
+	}))
 
-	Scheduler.Every(1).Days().At("04:00").Do(cleanCacheFiles)
+	Scheduler.NewJob(newgoCron.DailyJob(1, newgoCron.NewAtTimes(newgoCron.NewAtTime(4, 0, 0))), newgoCron.NewTask(cleanCacheFiles))
 
-	Scheduler.StartAsync()
+	Scheduler.Start()
 }
 
 func initService() {
@@ -212,16 +219,8 @@ func initResourcesForExternalClusters() {
 		if cluster.Local || cluster.Status != hubserverconfig.Normal {
 			continue
 		}
-		var client client2.Client
-		switch cluster.Type {
-		case setting.AgentClusterType, "":
-			client, err = multicluster.GetKubeClient(config.HubServerAddress(), cluster.ID.Hex())
-		case setting.KubeConfigClusterType:
-			client, err = multicluster.GetKubeClientFromKubeConfig(cluster.ID.Hex(), cluster.KubeConfig)
-		default:
-			logger.Errorf("failed to create kubeclient: unknown cluster type: %s", cluster.Type)
-			return
-		}
+		var client controllerRuntimeClient.Client
+		client, err = clientmanager.NewKubeClientManager().GetControllerRuntimeClient(cluster.ID.Hex())
 		if err != nil {
 			logger.Errorf("GetKubeClient id-%s err: %v", cluster.ID.Hex(), err)
 			return
@@ -305,7 +304,7 @@ func initResourcesForExternalClusters() {
 }
 
 func initDinD() {
-	err := systemservice.SyncDinDForRegistries()
+	err := commonutil.SyncDinDForRegistries()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -353,4 +352,11 @@ func initDatabaseConnection() {
 	if err := mongotool.Ping(ctx); err != nil {
 		panic(fmt.Errorf("failed to connect to mongo, error: %s", err))
 	}
+}
+
+func initEventBusSubscription() {
+	eb := redisEventBus.New(configbase.RedisCommonCacheTokenDB())
+
+	eb.RegisterHandleFunc(setting.EventBusChannelClusterUpdate, kube.UpdateClusterHandler)
+	eb.Subscribe(context.Background(), setting.EventBusChannelClusterUpdate)
 }

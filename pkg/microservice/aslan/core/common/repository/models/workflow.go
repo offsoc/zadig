@@ -121,6 +121,7 @@ type Schedule struct {
 	ID              primitive.ObjectID  `bson:"_id,omitempty"                 json:"id,omitempty"`
 	Number          uint64              `bson:"number"                        json:"number"`
 	Frequency       string              `bson:"frequency"                     json:"frequency"`
+	UnixStamp       int64               `bson:"unix_stamp"                    json:"unix_stamp"`
 	Time            string              `bson:"time"                          json:"time"`
 	MaxFailures     int                 `bson:"max_failures,omitempty"        json:"max_failures,omitempty"`
 	TaskArgs        *TaskArgs           `bson:"task_args,omitempty"           json:"task_args,omitempty"`
@@ -280,9 +281,9 @@ type TestStage struct {
 
 // TestExecArgs ...
 type TestExecArgs struct {
-	Name    string    `bson:"test_name"             json:"test_name"`
-	Envs    []*KeyVal `bson:"envs"                  json:"envs"`
-	Project string    `bson:"project"               json:"project"`
+	Name    string     `bson:"test_name"             json:"test_name"`
+	Envs    KeyValList `bson:"envs"                  json:"envs"`
+	Project string     `bson:"project"               json:"project"`
 }
 
 type SecurityStage struct {
@@ -336,6 +337,7 @@ type NotifyCtl struct {
 	LarkHookNotificationConfig   *LarkHookNotificationConfig   `bson:"lark_hook_notification_config,omitempty"   yaml:"lark_hook_notification_config,omitempty"   json:"lark_hook_notification_config,omitempty"`
 	WechatNotificationConfig     *WechatNotificationConfig     `bson:"wechat_notification_config,omitempty"      yaml:"wechat_notification_config,omitempty"      json:"wechat_notification_config,omitempty"`
 	DingDingNotificationConfig   *DingDingNotificationConfig   `bson:"dingding_notification_config,omitempty"    yaml:"dingding_notification_config,omitempty"    json:"dingding_notification_config,omitempty"`
+	MSTeamsNotificationConfig    *MSTeamsNotificationConfig    `bson:"msteams_notification_config,omitempty"     yaml:"msteams_notification_config,omitempty"     json:"msteams_notification_config,omitempty"`
 	MailNotificationConfig       *MailNotificationConfig       `bson:"mail_notification_config,omitempty"        yaml:"mail_notification_config,omitempty"        json:"mail_notification_config,omitempty"`
 	WebhookNotificationConfig    *WebhookNotificationConfig    `bson:"webhook_notification_config,omitempty"     yaml:"webhook_notification_config,omitempty"     json:"webhook_notification_config,omitempty"`
 
@@ -435,6 +437,8 @@ func (n *NotifyCtl) GenerateNewNotifyConfigWithOldData() error {
 				IsAtAll:     n.IsAtAll,
 			}
 		}
+	case setting.NotifyWebHookTypeMSTeam:
+		break
 	default:
 		return fmt.Errorf("unsupported notification type: %s", n.WebHookType)
 	}

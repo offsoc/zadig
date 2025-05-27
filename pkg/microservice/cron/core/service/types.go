@@ -37,6 +37,8 @@ const (
 	TimingSchedule ScheduleType = "timing"
 	// GapSchedule 间隔循环
 	GapSchedule ScheduleType = "gap"
+	// UnixstampSchedule 时间戳定时
+	UnixstampSchedule ScheduleType = "unix_stamp"
 )
 
 type PipelineResource struct {
@@ -80,6 +82,7 @@ type PipelineSpec struct {
 type Schedule struct {
 	ID              primitive.ObjectID `bson:"_id,omitempty"                 json:"id,omitempty"`
 	Number          uint64             `bson:"number"                        json:"number"`
+	UnixStamp       int64              `bson:"unix_stamp"                    json:"unix_stamp"`
 	Frequency       string             `bson:"frequency"                     json:"frequency"`
 	Time            string             `bson:"time"                          json:"time"`
 	MaxFailures     int                `bson:"max_failures,omitempty"        json:"max_failures,omitempty"`
@@ -513,10 +516,10 @@ type Approval struct {
 }
 
 type NativeApproval struct {
-	Timeout         int                    `bson:"timeout"                     yaml:"timeout"                    json:"timeout"`
-	ApproveUsers    []*User                `bson:"approve_users"               yaml:"approve_users"              json:"approve_users"`
-	NeededApprovers int                    `bson:"needed_approvers"            yaml:"needed_approvers"           json:"needed_approvers"`
-	RejectOrApprove config.ApproveOrReject `bson:"reject_or_approve"           yaml:"-"                          json:"reject_or_approve"`
+	Timeout         int                   `bson:"timeout"                     yaml:"timeout"                    json:"timeout"`
+	ApproveUsers    []*User               `bson:"approve_users"               yaml:"approve_users"              json:"approve_users"`
+	NeededApprovers int                   `bson:"needed_approvers"            yaml:"needed_approvers"           json:"needed_approvers"`
+	RejectOrApprove config.ApprovalStatus `bson:"reject_or_approve"           yaml:"-"                          json:"reject_or_approve"`
 }
 
 type LarkApproval struct {
@@ -526,11 +529,11 @@ type LarkApproval struct {
 }
 
 type User struct {
-	UserID          string                 `bson:"user_id"                     yaml:"user_id"                    json:"user_id"`
-	UserName        string                 `bson:"user_name"                   yaml:"user_name"                  json:"user_name"`
-	RejectOrApprove config.ApproveOrReject `bson:"reject_or_approve"           yaml:"-"                          json:"reject_or_approve"`
-	Comment         string                 `bson:"comment"                     yaml:"-"                          json:"comment"`
-	OperationTime   int64                  `bson:"operation_time"              yaml:"-"                          json:"operation_time"`
+	UserID          string                `bson:"user_id"                     yaml:"user_id"                    json:"user_id"`
+	UserName        string                `bson:"user_name"                   yaml:"user_name"                  json:"user_name"`
+	RejectOrApprove config.ApprovalStatus `bson:"reject_or_approve"           yaml:"-"                          json:"reject_or_approve"`
+	Comment         string                `bson:"comment"                     yaml:"-"                          json:"comment"`
+	OperationTime   int64                 `bson:"operation_time"              yaml:"-"                          json:"operation_time"`
 }
 
 type Job struct {
@@ -548,6 +551,7 @@ type Param struct {
 	ParamsType   string   `bson:"type"                      json:"type"                        yaml:"type"`
 	Value        string   `bson:"value"                     json:"value"                       yaml:"value,omitempty"`
 	ChoiceOption []string `bson:"choice_option,omitempty"   json:"choice_option,omitempty"     yaml:"choice_option,omitempty"`
+	ChoiceValue  []string `bson:"choice_value,omitempty"    json:"choice_value,omitempty"      yaml:"choice_value,omitempty"`
 	Default      string   `bson:"default"                   json:"default"                     yaml:"default"`
 	IsCredential bool     `bson:"is_credential"             json:"is_credential"               yaml:"is_credential"`
 }

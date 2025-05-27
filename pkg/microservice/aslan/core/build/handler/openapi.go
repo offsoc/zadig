@@ -118,7 +118,7 @@ func OpenAPIDeleteBuildModule(c *gin.Context) {
 
 	buildName := c.Query("name")
 	projectKey := c.Query("projectKey")
-	internalhandler.InsertOperationLog(c, ctx.UserName, projectKey, "(OpenAPI)"+"删除", "项目管理-构建", buildName, "", ctx.Logger)
+	internalhandler.InsertOperationLog(c, ctx.UserName, projectKey, "(OpenAPI)"+"删除", "项目管理-构建", buildName, "", types.RequestBodyTypeJSON, ctx.Logger)
 
 	// authorization checks
 	if !ctx.Resources.IsSystemAdmin {
@@ -217,6 +217,9 @@ func OpenAPIGetBuildModule(c *gin.Context) {
 		return
 	}
 
+	serviceName := c.Query("serviceName")
+	serviceModule := c.Query("serviceModule")
+
 	// authorization checks
 	if !ctx.Resources.IsSystemAdmin {
 		if _, ok := ctx.Resources.ProjectAuthInfo[projectKey]; !ok {
@@ -230,5 +233,5 @@ func OpenAPIGetBuildModule(c *gin.Context) {
 		}
 	}
 
-	ctx.Resp, ctx.RespErr = buildservice.OpenAPIGetBuildModule(name, projectKey, ctx.Logger)
+	ctx.Resp, ctx.RespErr = buildservice.OpenAPIGetBuildModule(name, serviceName, serviceModule, projectKey, ctx.Logger)
 }

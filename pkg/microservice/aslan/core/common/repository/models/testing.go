@@ -17,6 +17,7 @@ limitations under the License.
 package models
 
 import (
+	"github.com/koderover/zadig/v2/pkg/util"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/koderover/zadig/v2/pkg/setting"
@@ -99,14 +100,18 @@ type PreTest struct {
 	// Installs defines apps to be installed for build
 	Installs []*Item `bson:"installs,omitempty"    json:"installs"`
 	// Envs stores user defined env key val for build
-	Envs []*KeyVal `bson:"envs,omitempty"              json:"envs"`
+	Envs KeyValList `bson:"envs,omitempty"              json:"envs"`
 	// EnableProxy
 	EnableProxy      bool   `bson:"enable_proxy"           json:"enable_proxy"`
 	ClusterID        string `bson:"cluster_id"             json:"cluster_id"`
+	ClusterSource    string `bson:"cluster_source"         json:"cluster_source"`
 	StrategyID       string `bson:"strategy_id"            json:"strategy_id"`
 	ConcurrencyLimit int    `bson:"concurrency_limit"      json:"concurrency_limit"`
 	// TODO: Deprecated.
 	Namespace string `bson:"namespace"              json:"namespace"`
+
+	CustomAnnotations []*util.KeyValue `bson:"custom_annotations"        json:"custom_annotations"`
+	CustomLabels      []*util.KeyValue `bson:"custom_labels"             json:"custom_labels"`
 }
 
 type PostTest struct {

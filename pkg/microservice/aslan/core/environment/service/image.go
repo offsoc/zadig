@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"go.uber.org/zap"
 
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
@@ -31,7 +32,6 @@ import (
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/repository"
 	commonutil "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/util"
 	"github.com/koderover/zadig/v2/pkg/setting"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
 	e "github.com/koderover/zadig/v2/pkg/tool/errors"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/updater"
 	"github.com/koderover/zadig/v2/pkg/tool/log"
@@ -68,7 +68,8 @@ func updateContainerForHelmChart(username, serviceName, image, containerName str
 		return err
 	}
 
-	err = kube.UpgradeHelmRelease(product, targetProductService, serviceObj, []string{image}, 0, username)
+	targetProductService.DeployStrategy = setting.ServiceDeployStrategyDeploy
+	err = kube.DeploySingleHelmRelease(product, targetProductService, serviceObj, []string{image}, 0, username)
 	if err != nil {
 		return fmt.Errorf("failed to upgrade helm release, err: %s", err.Error())
 	}
@@ -86,12 +87,12 @@ func UpdateContainerImage(requestID, username string, args *UpdateContainerImage
 	}
 
 	namespace := product.Namespace
-	kubeClient, err := kubeclient.GetKubeClient(config.HubServerAddress(), product.ClusterID)
+	kubeClient, err := clientmanager.NewKubeClientManager().GetControllerRuntimeClient(product.ClusterID)
 	if err != nil {
 		return e.ErrUpdateConainterImage.AddErr(err)
 	}
 
-	cls, err := kubeclient.GetKubeClientSet(config.HubServerAddress(), product.ClusterID)
+	cls, err := clientmanager.NewKubeClientManager().GetKubernetesClientSet(product.ClusterID)
 	if err != nil {
 		return e.ErrUpdateConainterImage.AddErr(err)
 	}
@@ -180,7 +181,7 @@ func UpdateContainerImage(requestID, username string, args *UpdateContainerImage
 			return e.ErrUpdateConainterImage.AddDesc("更新环境信息失败")
 		}
 
-		err = commonutil.CreateEnvServiceVersion(product, prodSvc, username, session, log)
+		err = commonutil.CreateEnvServiceVersion(product, prodSvc, username, config.EnvOperationDefault, "", session, log)
 		if err != nil {
 			log.Errorf("create env service version for %s/%s error: %v", product.EnvName, prodSvc.ServiceName, err)
 		}

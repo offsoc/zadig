@@ -17,6 +17,10 @@ limitations under the License.
 package models
 
 import (
+	"strings"
+
+	"github.com/koderover/zadig/v2/pkg/microservice/aslan/config"
+	"github.com/koderover/zadig/v2/pkg/util"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/koderover/zadig/v2/pkg/setting"
@@ -81,17 +85,21 @@ type PreBuild struct {
 	// Installs defines apps to be installed for build
 	Installs []*Item `bson:"installs,omitempty"           json:"installs"`
 	// Envs stores user defined env key val for build
-	Envs []*KeyVal `bson:"envs,omitempty"              json:"envs"`
+	Envs KeyValList `bson:"envs,omitempty"              json:"envs"`
 	// EnableProxy
 	EnableProxy bool `bson:"enable_proxy,omitempty"        json:"enable_proxy"`
 	// Parameters
 	Parameters []*Parameter `bson:"parameters,omitempty"   json:"parameters"`
 	// UploadPkg uploads package to s3
-	UploadPkg  bool   `bson:"upload_pkg"                      json:"upload_pkg"`
-	ClusterID  string `bson:"cluster_id"                      json:"cluster_id"`
-	StrategyID string `bson:"strategy_id"                     json:"strategy_id"`
+	UploadPkg     bool   `bson:"upload_pkg"                      json:"upload_pkg"`
+	ClusterID     string `bson:"cluster_id"                      json:"cluster_id"`
+	ClusterSource string `bson:"cluster_source"                  json:"cluster_source"`
+	StrategyID    string `bson:"strategy_id"                     json:"strategy_id"`
 	// UseHostDockerDaemon determines is dockerDaemon on host node is used in pod
 	UseHostDockerDaemon bool `bson:"use_host_docker_daemon" json:"use_host_docker_daemon"`
+
+	CustomAnnotations []*util.KeyValue `bson:"custom_annotations" json:"custom_annotations" yaml:"custom_annotations"`
+	CustomLabels      []*util.KeyValue `bson:"custom_labels"      json:"custom_labels"      yaml:"custom_labels"`
 
 	// TODO: Deprecated.
 	Namespace string `bson:"namespace"                       json:"namespace"`
@@ -127,9 +135,9 @@ type FileArchive struct {
 }
 
 type ObjectStorageUpload struct {
-	Enabled         bool                             `bson:"enabled"           json:"enabled"`
-	ObjectStorageID string                           `bson:"object_storage_id" json:"object_storage_id"`
-	UploadDetail    []*types.ObjectStoragePathDetail `bson:"upload_detail"     json:"upload_detail"`
+	Enabled         bool                             `bson:"enabled"           json:"enabled" yaml:"enabled"`
+	ObjectStorageID string                           `bson:"object_storage_id" json:"object_storage_id" yaml:"object_storage_id"`
+	UploadDetail    []*types.ObjectStoragePathDetail `bson:"upload_detail"     json:"upload_detail" yaml:"upload_detail"`
 }
 
 type DockerBuild struct {
@@ -170,7 +178,7 @@ type ServiceModuleTarget struct {
 	ServiceWithModule `bson:",inline"                       json:",inline"`
 	BuildName         string              `bson:"build_name"                    json:"build_name"`
 	Repos             []*types.Repository `bson:"repos,omitempty"               json:"repos,omitempty"`
-	Envs              []*KeyVal           `bson:"envs,omitempty"                json:"envs"`
+	Envs              KeyValList          `bson:"envs,omitempty"                json:"envs"`
 }
 
 type ServiceWithModule struct {
@@ -186,7 +194,7 @@ type ServiceModuleTargetBase struct {
 type TargetRepo struct {
 	Service *ServiceModuleTargetBase `json:"service"`
 	Repos   []*types.Repository      `json:"repos"`
-	Envs    []*KeyVal                `json:"envs"`
+	Envs    KeyValList               `json:"envs"`
 }
 
 type KeyVal struct {
@@ -195,11 +203,48 @@ type KeyVal struct {
 	Type              ParameterSettingType `bson:"type,omitempty"               json:"type,omitempty"               yaml:"type"`
 	RegistryID        string               `bson:"registry_id,omitempty"        json:"registry_id"                  yaml:"registry_id"`
 	ChoiceOption      []string             `bson:"choice_option,omitempty"      json:"choice_option,omitempty"      yaml:"choice_option,omitempty"`
+	ChoiceValue       []string             `bson:"choice_value,omitempty"       json:"choice_value,omitempty"       yaml:"choice_value,omitempty"`
 	Script            string               `bson:"script,omitempty"             json:"script,omitempty"             yaml:"script,omitempty"`
 	CallFunction      string               `bson:"call_function,omitempty"      json:"call_function,omitempty"      yaml:"call_function,omitempty"`
 	FunctionReference []string             `bson:"function_reference,omitempty" json:"function_reference,omitempty" yaml:"function_reference,omitempty"`
 	IsCredential      bool                 `bson:"is_credential"                json:"is_credential"                yaml:"is_credential"`
 	Description       string               `bson:"description"                  json:"description"                  yaml:"description"`
+}
+
+func (kv *KeyVal) GetValue() string {
+	if kv.Type == MultiSelectType {
+		return strings.Join(kv.ChoiceValue, ",")
+	}
+	return kv.Value
+}
+
+type KeyValList []*KeyVal
+
+func (list KeyValList) ToRuntimeList() RuntimeKeyValList {
+	resp := make([]*RuntimeKeyVal, 0)
+	for _, kv := range list {
+		resp = append(resp, &RuntimeKeyVal{
+			KeyVal: kv,
+			Source: config.ParamSourceRuntime,
+		})
+	}
+	return resp
+}
+
+type RuntimeKeyVal struct {
+	*KeyVal `bson:",inline" json:",inline" yaml:",inline"`
+
+	Source config.ParamSourceType `bson:"source" json:"source" yaml:"source"`
+}
+
+type RuntimeKeyValList []*RuntimeKeyVal
+
+func (list RuntimeKeyValList) ToKVList() KeyValList {
+	resp := make([]*KeyVal, 0)
+	for _, kv := range list {
+		resp = append(resp, kv.KeyVal)
+	}
+	return resp
 }
 
 type Item struct {

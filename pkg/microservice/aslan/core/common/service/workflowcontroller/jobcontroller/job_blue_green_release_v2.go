@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/labels"
@@ -31,7 +32,6 @@ import (
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/mongodb"
 	commonutil "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/util"
 	"github.com/koderover/zadig/v2/pkg/setting"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
 	"github.com/koderover/zadig/v2/pkg/shared/kube/wrapper"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/getter"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/updater"
@@ -77,7 +77,7 @@ func (c *BlueGreenReleaseV2JobCtl) Clean(ctx context.Context) {
 	c.namespace = env.Namespace
 	clusterID := env.ClusterID
 
-	c.kubeClient, err = kubeclient.GetKubeClient(config.HubServerAddress(), clusterID)
+	c.kubeClient, err = clientmanager.NewKubeClientManager().GetControllerRuntimeClient(clusterID)
 	if err != nil {
 		c.logger.Errorf("can't init k8s client: %v", err)
 		return
@@ -162,7 +162,7 @@ func (c *BlueGreenReleaseV2JobCtl) run(ctx context.Context) error {
 	c.jobTaskSpec.Namespace = env.Namespace
 	clusterID := env.ClusterID
 
-	c.kubeClient, err = kubeclient.GetKubeClient(config.HubServerAddress(), clusterID)
+	c.kubeClient, err = clientmanager.NewKubeClientManager().GetControllerRuntimeClient(clusterID)
 	if err != nil {
 		msg := fmt.Sprintf("can't init k8s client: %v", err)
 		logError(c.job, msg, c.logger)
@@ -180,7 +180,7 @@ func (c *BlueGreenReleaseV2JobCtl) run(ctx context.Context) error {
 			c.jobTaskSpec.Events.Error(msg)
 			return errors.New(msg)
 		}
-		if err := commonutil.UpdateProductImage(c.jobTaskSpec.Env, c.workflowCtx.ProjectName, c.jobTaskSpec.Service.ServiceName, map[string]string{v.ServiceModule: v.Image}, c.workflowCtx.WorkflowTaskCreatorUsername, c.logger); err != nil {
+		if err := commonutil.UpdateProductImage(c.jobTaskSpec.Env, c.workflowCtx.ProjectName, c.jobTaskSpec.Service.ServiceName, map[string]string{v.ServiceModule: v.Image}, "", c.workflowCtx.WorkflowTaskCreatorUsername, c.logger); err != nil {
 			msg := fmt.Sprintf("update product image service %s service module %s image %s error: %v", c.jobTaskSpec.Service.ServiceName, v.ServiceModule, v.Image, err)
 			logError(c.job, msg, c.logger)
 			c.jobTaskSpec.Events.Error(msg)

@@ -39,8 +39,10 @@ type WorkflowTask struct {
 	GlobalContext       map[string]string             `bson:"global_context"            json:"global_context"`
 	ClusterIDMap        map[string]bool               `bson:"cluster_id_map"            json:"cluster_id_map"`
 	Status              config.Status                 `bson:"status"                    json:"status,omitempty"`
+	Reverted            bool                          `bson:"reverted"                  json:"reverted"`
 	Remark              string                        `bson:"remark,omitempty"          json:"remark"`
 	TaskCreator         string                        `bson:"task_creator"              json:"task_creator,omitempty"`
+	TaskCreatorAccount  string                        `bson:"task_creator_account"      json:"task_creator_account,omitempty"`
 	TaskCreatorID       string                        `bson:"task_creator_id"           json:"task_creator_id,omitempty"`
 	TaskCreatorPhone    string                        `bson:"task_creator_phone"        json:"task_creator_phone"`
 	TaskCreatorEmail    string                        `bson:"task_creator_email"        json:"task_creator_email"`
@@ -117,7 +119,8 @@ type JobTask struct {
 	ErrorHandlerUserID   string `bson:"error_handler_user_id"  yaml:"error_handler_user_id" json:"error_handler_user_id"`
 	ErrorHandlerUserName string `bson:"error_handler_username"  yaml:"error_handler_username" json:"error_handler_username"`
 
-	RetryCount int `bson:"retry_count" json:"retry_count" yaml:"retry_count"`
+	RetryCount int  `bson:"retry_count" json:"retry_count" yaml:"retry_count"`
+	Reverted   bool `bson:"reverted"    json:"reverted"    yaml:"reverted"`
 }
 
 type TaskJobInfo struct {
@@ -137,6 +140,7 @@ type WorkflowTaskPreview struct {
 	WorkflowDisplayName string          `bson:"workflow_display_name" json:"workflow_display_name"`
 	Remark              string          `bson:"remark"                json:"remark"`
 	Status              config.Status   `bson:"status"                json:"status"`
+	Reverted            bool            `bson:"reverted"              json:"reverted"`
 	CreateTime          int64           `bson:"create_time"           json:"create_time,omitempty"`
 	StartTime           int64           `bson:"start_time"            json:"start_time,omitempty"`
 	EndTime             int64           `bson:"end_time"              json:"end_time,omitempty"`
@@ -170,7 +174,8 @@ type JobPreview struct {
 }
 
 type WorkflowTestModule struct {
-	RunningJobName string  `json:"running_job_name"`
+	JobName        string  `json:"job_name"`
+	JobTaskName    string  `json:"job_task_name"`
 	Type           string  `json:"type"`
 	TestName       string  `json:"name"`
 	TestCaseNum    int     `json:"total_case_num"`
@@ -201,9 +206,8 @@ type JobTaskDeploySpec struct {
 	ServiceName        string                          `bson:"service_name"                     json:"service_name"                        yaml:"service_name"`
 	Production         bool                            `bson:"production"                       json:"production"                          yaml:"production"`
 	DeployContents     []config.DeployContent          `bson:"deploy_contents"                  json:"deploy_contents"                     yaml:"deploy_contents"`
-	KeyVals            []*ServiceKeyVal                `bson:"key_vals"                         json:"key_vals"                            yaml:"key_vals"`         // deprecated since 1.18.0
-	VariableConfigs    []*DeployVariableConfig         `bson:"variable_configs"                 json:"variable_configs"                    yaml:"variable_configs"` // new since 1.18.0, only used for k8s
-	VariableKVs        []*commontypes.RenderVariableKV `bson:"variable_kvs"                     json:"variable_kvs"                        yaml:"variable_kvs"`     // new since 1.18.0, only used for k8s
+	KeyVals            []*ServiceKeyVal                `bson:"key_vals"                         json:"key_vals"                            yaml:"key_vals"`     // deprecated since 1.18.0
+	VariableKVs        []*commontypes.RenderVariableKV `bson:"variable_kvs"                     json:"variable_kvs"                        yaml:"variable_kvs"` // new since 1.18.0, only used for k8s
 	UpdateConfig       bool                            `bson:"update_config"                    json:"update_config"                       yaml:"update_config"`
 	YamlContent        string                          `bson:"yaml_content"                     json:"yaml_content"                        yaml:"yaml_content"`
 	ServiceAndImages   []*DeployServiceModule          `bson:"service_and_images"               json:"service_and_images"                  yaml:"service_and_images"`
@@ -217,6 +221,22 @@ type JobTaskDeploySpec struct {
 	// for compatibility
 	ServiceModule string `bson:"service_module"                   json:"service_module"                      yaml:"-"`
 	Image         string `bson:"image"                            json:"image"                               yaml:"-"`
+	// for revert
+	OriginRevision int64 `bson:"origin_revision"                   json:"origin_revision"                      yaml:"origin_revision"`
+}
+
+type JobTaskDeployRevertSpec struct {
+	JobTaskCommonRevertSpec `bson:",inline"          json:",inline"          yaml:",inline"`
+	Env                     string       `bson:"env"                              json:"env"                                 yaml:"env"`
+	ServiceName             string       `bson:"service_name"                     json:"service_name"                        yaml:"service_name"`
+	Production              bool         `bson:"production"                       json:"production"                          yaml:"production"`
+	ServiceType             string       `bson:"service_type"                     json:"service_type"                        yaml:"service_type"`
+	Containers              []*Container `bson:"containers"                       json:"containers"                          yaml:"containers"`
+	Yaml                    string       `bson:"yaml"                             json:"yaml"                                yaml:"yaml"`
+	VariableYaml            string       `bson:"variable_yaml"                    json:"variable_yaml"                       yaml:"variable_yaml"`
+	OverrideKVs             string       `bson:"override_kvs"                     json:"override_kvs"                        yaml:"override_kvs"`
+	Revision                int64        `bson:"revision"                         json:"revision"                            yaml:"revision"`
+	RevisionCreateTime      int64        `bson:"revision_create_time"             json:"revision_create_time"                yaml:"revision_create_time"`
 }
 
 type DeployServiceModule struct {
@@ -234,25 +254,37 @@ type Resource struct {
 }
 
 type JobTaskHelmDeploySpec struct {
-	Env            string                 `bson:"env"                              json:"env"                                 yaml:"env"`
-	ServiceName    string                 `bson:"service_name"                     json:"service_name"                        yaml:"service_name"`
-	ServiceType    string                 `bson:"service_type"                     json:"service_type"                        yaml:"service_type"`
-	DeployContents []config.DeployContent `bson:"deploy_contents"                  json:"deploy_contents"                     yaml:"deploy_contents"`
-	KeyVals        []*ServiceKeyVal       `bson:"key_vals"                         json:"key_vals"                            yaml:"key_vals"`
+	Env            string                  `bson:"env"                              json:"env"                                 yaml:"env"`
+	Source         config.DeploySourceType `bson:"source"                           json:"source"                   yaml:"source" `
+	ServiceName    string                  `bson:"service_name"                     json:"service_name"                        yaml:"service_name"`
+	ServiceType    string                  `bson:"service_type"                     json:"service_type"                        yaml:"service_type"`
+	DeployContents []config.DeployContent  `bson:"deploy_contents"                  json:"deploy_contents"                     yaml:"deploy_contents"`
+	KeyVals        []*ServiceKeyVal        `bson:"key_vals"                         json:"key_vals"                            yaml:"key_vals"`
 	// VariableYaml stores the variable YAML provided by user
 	VariableYaml string `bson:"variable_yaml"                    json:"variable_yaml"                       yaml:"variable_yaml"`
 	// IsProduction added since 1.18, indicator of production environment deployment job
 	IsProduction bool   `bson:"is_production" yaml:"is_production" json:"is_production"`
 	YamlContent  string `bson:"yaml_content"                     json:"yaml_content"                        yaml:"yaml_content"`
 	// UserSuppliedValue added since 1.18, the values that users gives.
-	UserSuppliedValue  string                   `bson:"user_supplied_value" json:"user_supplied_value" yaml:"user_supplied_value"`
-	UpdateConfig       bool                     `bson:"update_config"                    json:"update_config"                       yaml:"update_config"`
-	SkipCheckRunStatus bool                     `bson:"skip_check_run_status"            json:"skip_check_run_status"               yaml:"skip_check_run_status"`
-	ImageAndModules    []*ImageAndServiceModule `bson:"image_and_service_modules"        json:"image_and_service_modules"           yaml:"image_and_service_modules"`
-	ClusterID          string                   `bson:"cluster_id"                       json:"cluster_id"                          yaml:"cluster_id"`
-	ReleaseName        string                   `bson:"release_name"                     json:"release_name"                        yaml:"release_name"`
-	Timeout            int                      `bson:"timeout"                          json:"timeout"                             yaml:"timeout"`
-	ReplaceResources   []Resource               `bson:"replace_resources"                json:"replace_resources"                   yaml:"replace_resources"`
+	UserSuppliedValue            string                    `bson:"user_supplied_value" json:"user_supplied_value" yaml:"user_supplied_value"`
+	UpdateConfig                 bool                      `bson:"update_config"                    json:"update_config"                       yaml:"update_config"`
+	SkipCheckRunStatus           bool                      `bson:"skip_check_run_status"            json:"skip_check_run_status"               yaml:"skip_check_run_status"`
+	SkipCheckHelmWorkfloadStatus bool                      `bson:"skip_check_helm_workload_status"  json:"skip_check_helm_workload_status"     yaml:"skip_check_helm_workload_status"`
+	ImageAndModules              []*ImageAndServiceModule  `bson:"image_and_service_modules"        json:"image_and_service_modules"           yaml:"image_and_service_modules"`
+	ClusterID                    string                    `bson:"cluster_id"                       json:"cluster_id"                          yaml:"cluster_id"`
+	ReleaseName                  string                    `bson:"release_name"                     json:"release_name"                        yaml:"release_name"`
+	Timeout                      int                       `bson:"timeout"                          json:"timeout"                             yaml:"timeout"`
+	ReplaceResources             []Resource                `bson:"replace_resources"                json:"replace_resources"                   yaml:"replace_resources"`
+	OriginRevision               int64                     `bson:"origin_revision"                  json:"origin_revision"                     yaml:"origin_revision"`
+	ValueMergeStrategy           config.ValueMergeStrategy `bson:"value_merge_strategy"             json:"value_merge_strategy"                yaml:"value_merge_strategy"`
+}
+
+func (j *JobTaskHelmDeploySpec) GetDeployImages() []string {
+	images := make([]string, 0)
+	for _, imageAndModule := range j.ImageAndModules {
+		images = append(images, imageAndModule.Image)
+	}
+	return images
 }
 
 type JobTaskHelmChartDeploySpec struct {
@@ -448,14 +480,18 @@ type JobTaskJiraSpec struct {
 	TargetStatus string     `bson:"target_status" json:"target_status" yaml:"target_status"`
 }
 
+type JobTaskCommonRevertSpec struct {
+	Detail string `bson:"detail"           json:"detail"           yaml:"detail"`
+}
 type JobTaskNacosSpec struct {
-	NacosID       string       `bson:"nacos_id"         json:"nacos_id"         yaml:"nacos_id"`
-	NamespaceID   string       `bson:"namespace_id"     json:"namespace_id"     yaml:"namespace_id"`
-	NamespaceName string       `bson:"namespace_name"   json:"namespace_name"   yaml:"namespace_name"`
-	NacosAddr     string       `bson:"nacos_addr"       json:"nacos_addr"       yaml:"nacos_addr"`
-	UserName      string       `bson:"user_name"        json:"user_name"        yaml:"user_name"`
-	Password      string       `bson:"password"         json:"password"         yaml:"password"`
-	NacosDatas    []*NacosData `bson:"nacos_datas"      json:"nacos_datas"      yaml:"nacos_datas"`
+	JobTaskCommonRevertSpec `bson:",inline"          json:",inline"          yaml:",inline"`
+	NacosID                 string       `bson:"nacos_id"         json:"nacos_id"         yaml:"nacos_id"`
+	NamespaceID             string       `bson:"namespace_id"     json:"namespace_id"     yaml:"namespace_id"`
+	NamespaceName           string       `bson:"namespace_name"   json:"namespace_name"   yaml:"namespace_name"`
+	NacosAddr               string       `bson:"nacos_addr"       json:"nacos_addr"       yaml:"nacos_addr"`
+	UserName                string       `bson:"user_name"        json:"user_name"        yaml:"user_name"`
+	Password                string       `bson:"password"         json:"password"         yaml:"password"`
+	NacosDatas              []*NacosData `bson:"nacos_datas"      json:"nacos_datas"      yaml:"nacos_datas"`
 }
 
 type NacosData struct {
@@ -464,10 +500,11 @@ type NacosData struct {
 }
 
 type JobTaskSQLSpec struct {
-	ID      string                `bson:"id" json:"id" yaml:"id"`
-	Type    config.DBInstanceType `bson:"type" json:"type" yaml:"type"`
-	SQL     string                `bson:"sql" json:"sql" yaml:"sql"`
-	Results []*SQLExecResult      `bson:"results" json:"results" yaml:"results"`
+	JobTaskCommonRevertSpec `bson:",inline"          json:",inline"          yaml:",inline"`
+	ID                      string                `bson:"id" json:"id" yaml:"id"`
+	Type                    config.DBInstanceType `bson:"type" json:"type" yaml:"type"`
+	SQL                     string                `bson:"sql" json:"sql" yaml:"sql"`
+	Results                 []*SQLExecResult      `bson:"results" json:"results" yaml:"results"`
 }
 
 type SQLExecResult struct {
@@ -628,6 +665,7 @@ type JobTaskNotificationSpec struct {
 	LarkPersonNotificationConfig *LarkPersonNotificationConfig `bson:"lark_person_notification_config,omitempty" yaml:"lark_person_notification_config,omitempty" json:"lark_person_notification_config,omitempty"`
 	WechatNotificationConfig     *WechatNotificationConfig     `bson:"wechat_notification_config,omitempty"      yaml:"wechat_notification_config,omitempty"      json:"wechat_notification_config,omitempty"`
 	DingDingNotificationConfig   *DingDingNotificationConfig   `bson:"dingding_notification_config,omitempty"    yaml:"dingding_notification_config,omitempty"    json:"dingding_notification_config,omitempty"`
+	MSTeamsNotificationConfig    *MSTeamsNotificationConfig    `bson:"msteams_notification_config,omitempty"     yaml:"msteams_notification_config,omitempty"     json:"msteams_notification_config,omitempty"`
 	MailNotificationConfig       *MailNotificationConfig       `bson:"mail_notification_config,omitempty"        yaml:"mail_notification_config,omitempty"        json:"mail_notification_config,omitempty"`
 	WebhookNotificationConfig    *WebhookNotificationConfig    `bson:"webhook_notification_config,omitempty"     yaml:"webhook_notification_config,omitempty"     json:"webhook_notification_config,omitempty"`
 

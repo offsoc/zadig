@@ -23,13 +23,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/koderover/zadig/v2/pkg/tool/clientmanager"
 	"github.com/pkg/errors"
-
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v2"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	crClient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	zadigconfig "github.com/koderover/zadig/v2/pkg/config"
@@ -40,10 +38,7 @@ import (
 	vmmongodb "github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/repository/mongodb/vm"
 	"github.com/koderover/zadig/v2/pkg/microservice/aslan/core/common/service/workflowcontroller/stepcontroller"
 	"github.com/koderover/zadig/v2/pkg/setting"
-	kubeclient "github.com/koderover/zadig/v2/pkg/shared/kube/client"
 	"github.com/koderover/zadig/v2/pkg/tool/dockerhost"
-	krkubeclient "github.com/koderover/zadig/v2/pkg/tool/kube/client"
-	"github.com/koderover/zadig/v2/pkg/tool/kube/informer"
 	"github.com/koderover/zadig/v2/pkg/tool/kube/updater"
 	"github.com/koderover/zadig/v2/pkg/types/step"
 )
@@ -58,8 +53,6 @@ type FreestyleJobCtl struct {
 	workflowCtx *commonmodels.WorkflowTaskCtx
 	logger      *zap.SugaredLogger
 	kubeclient  crClient.Client
-	clientset   kubernetes.Interface
-	restConfig  *rest.Config
 	informer    informers.SharedInformerFactory
 	apiServer   crClient.Reader
 	paths       *string
@@ -138,27 +131,20 @@ func (c *FreestyleJobCtl) prepare(ctx context.Context) error {
 
 func (c *FreestyleJobCtl) run(ctx context.Context) error {
 	// get kube client
-	hubServerAddr := config.HubServerAddress()
-	switch c.jobTaskSpec.Properties.ClusterID {
-	case setting.LocalClusterID:
+	hubServerAddr := zadigconfig.HubServerServiceAddress()
+	if c.jobTaskSpec.Properties.ClusterID == setting.LocalClusterID {
 		c.jobTaskSpec.Properties.Namespace = zadigconfig.Namespace()
-		c.kubeclient = krkubeclient.Client()
-		c.clientset = krkubeclient.Clientset()
-		c.restConfig = krkubeclient.RESTConfig()
-		c.apiServer = krkubeclient.APIReader()
-	default:
+	} else {
 		c.jobTaskSpec.Properties.Namespace = setting.AttachedClusterNamespace
-
-		crClient, clientset, restConfig, apiServer, err := GetK8sClients(hubServerAddr, c.jobTaskSpec.Properties.ClusterID)
-		if err != nil {
-			logError(c.job, err.Error(), c.logger)
-			return err
-		}
-		c.kubeclient = crClient
-		c.clientset = clientset
-		c.restConfig = restConfig
-		c.apiServer = apiServer
 	}
+
+	crClient, _, apiServer, err := GetK8sClients(hubServerAddr, c.jobTaskSpec.Properties.ClusterID)
+	if err != nil {
+		logError(c.job, err.Error(), c.logger)
+		return err
+	}
+	c.kubeclient = crClient
+	c.apiServer = apiServer
 
 	// decide which docker host to use.
 	// TODO: do not use code in warpdrive moudule, should move to a public place
@@ -188,7 +174,7 @@ func (c *FreestyleJobCtl) run(ctx context.Context) error {
 
 	c.jobTaskSpec.Properties.DockerHost = dockerHost
 
-	jobCtxBytes, err := yaml.Marshal(BuildJobExcutorContext(c.jobTaskSpec, c.job, c.workflowCtx, c.logger))
+	jobCtxBytes, err := yaml.Marshal(BuildJobExecutorContext(c.jobTaskSpec, c.job, c.workflowCtx, c.logger))
 	if err != nil {
 		msg := fmt.Sprintf("cannot Jobexcutor.Context data: %v", err)
 		logError(c.job, msg, c.logger)
@@ -217,7 +203,17 @@ func (c *FreestyleJobCtl) run(ctx context.Context) error {
 
 	c.jobTaskSpec.Properties.Registries = getMatchedRegistries(jobImage, c.jobTaskSpec.Properties.Registries)
 	//Resource request default value is LOW
-	job, err := buildJob(c.job.JobType, jobImage, c.job.K8sJobName, c.jobTaskSpec.Properties.ClusterID, c.jobTaskSpec.Properties.Namespace, c.jobTaskSpec.Properties.ResourceRequest, c.jobTaskSpec.Properties.ResReqSpec, c.job, c.jobTaskSpec, c.workflowCtx, nil)
+	customAnnotation := make(map[string]string)
+	customLabel := make(map[string]string)
+
+	for _, lb := range c.jobTaskSpec.Properties.CustomLabels {
+		customLabel[lb.Key] = lb.Value.(string)
+	}
+	for _, annotate := range c.jobTaskSpec.Properties.CustomAnnotations {
+		customAnnotation[annotate.Key] = annotate.Value.(string)
+	}
+
+	job, err := buildJob(c.job.JobType, jobImage, c.job.K8sJobName, c.jobTaskSpec.Properties.ClusterID, c.jobTaskSpec.Properties.Namespace, c.jobTaskSpec.Properties.ResourceRequest, c.jobTaskSpec.Properties.ResReqSpec, c.job, c.jobTaskSpec, c.workflowCtx, customLabel, customAnnotation)
 	if err != nil {
 		msg := fmt.Sprintf("create job context error: %v", err)
 		logError(c.job, msg, c.logger)
@@ -245,11 +241,7 @@ func (c *FreestyleJobCtl) run(ctx context.Context) error {
 	}
 
 	// set informer when job and cm have been created
-	clientSet, err := kubeclient.GetKubeClientSet(config.HubServerAddress(), c.jobTaskSpec.Properties.ClusterID)
-	if err != nil {
-		return errors.Wrap(err, "get kube client set")
-	}
-	informer, err := informer.NewInformer(c.jobTaskSpec.Properties.ClusterID, c.jobTaskSpec.Properties.Namespace, clientSet)
+	informer, err := clientmanager.NewKubeClientManager().GetInformer(c.jobTaskSpec.Properties.ClusterID, c.jobTaskSpec.Properties.Namespace)
 	if err != nil {
 		return errors.Wrap(err, "get informer")
 	}
@@ -259,7 +251,7 @@ func (c *FreestyleJobCtl) run(ctx context.Context) error {
 }
 
 func (c *FreestyleJobCtl) runVMJob(ctx context.Context) (string, error) {
-	jobCtxBytes, err := yaml.Marshal(BuildJobExcutorContext(c.jobTaskSpec, c.job, c.workflowCtx, c.logger))
+	jobCtxBytes, err := yaml.Marshal(BuildJobExecutorContext(c.jobTaskSpec, c.job, c.workflowCtx, c.logger))
 	if err != nil {
 
 		msg := fmt.Sprintf("cannot Jobexcutor.Context data: %v", err)
@@ -307,7 +299,7 @@ func (c *FreestyleJobCtl) wait(ctx context.Context) {
 	} else {
 		return
 	}
-	c.job.Status, c.job.Error = waitJobEndByCheckingConfigMap(ctx, taskTimeout, c.jobTaskSpec.Properties.Namespace, c.job.K8sJobName, true, c.kubeclient, c.clientset, c.restConfig, c.informer, c.job, c.ack, c.logger)
+	c.job.Status, c.job.Error = waitJobEndByCheckingConfigMap(ctx, taskTimeout, c.jobTaskSpec.Properties.Namespace, c.job.K8sJobName, true, c.informer, c.job, c.ack, c.logger)
 }
 
 func (c *FreestyleJobCtl) vmJobWait(ctx context.Context, jobID string) {
@@ -418,14 +410,14 @@ func getVMJobOutputFromJobDB(jobID, jobName string, job *commonmodels.JobTask, w
 	return nil
 }
 
-func BuildJobExcutorContext(jobTaskSpec *commonmodels.JobTaskFreestyleSpec, job *commonmodels.JobTask, workflowCtx *commonmodels.WorkflowTaskCtx, logger *zap.SugaredLogger) *JobContext {
+func BuildJobExecutorContext(jobTaskSpec *commonmodels.JobTaskFreestyleSpec, job *commonmodels.JobTask, workflowCtx *commonmodels.WorkflowTaskCtx, logger *zap.SugaredLogger) *JobContext {
 	var envVars, secretEnvVars []string
 	for _, env := range jobTaskSpec.Properties.Envs {
 		if env.IsCredential {
-			secretEnvVars = append(secretEnvVars, strings.Join([]string{env.Key, env.Value}, "="))
+			secretEnvVars = append(secretEnvVars, strings.Join([]string{env.Key, env.GetValue()}, "="))
 			continue
 		}
-		envVars = append(envVars, strings.Join([]string{env.Key, env.Value}, "="))
+		envVars = append(envVars, strings.Join([]string{env.Key, env.GetValue()}, "="))
 	}
 
 	outputs := []string{}
@@ -444,8 +436,8 @@ func BuildJobExcutorContext(jobTaskSpec *commonmodels.JobTaskFreestyleSpec, job 
 		Workspace:     workflowCtx.Workspace,
 		TaskID:        workflowCtx.TaskID,
 		Outputs:       outputs,
-		Steps:         jobTaskSpec.Steps,
 		Paths:         jobTaskSpec.Properties.Paths,
+		Steps:         jobTaskSpec.Steps,
 		ConfigMapName: job.K8sJobName,
 	}
 
